@@ -1,7 +1,5 @@
 #include "ui/EngineBridge.h"
 
-#include "core/Log.h"
-
 namespace moo::ui {
 
 namespace {

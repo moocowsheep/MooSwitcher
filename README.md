@@ -4,20 +4,25 @@ A live video switcher for Linux + NVIDIA: NDI inputs, program/preview switching 
 transitions, NDI and SRT (HEVC/NVENC) program outputs, full audio mixer, Qt 6 GUI with
 Vulkan multiview. Built for low latency at up to 8K 59.94p.
 
-Status: **M3 + M3.5 complete** — SRT is in, both directions. Output: program → GPU NV12 pack →
-NVENC HEVC (p4/ull CBR) → MPEG-TS over `srt://` with auto-reconnect; **8K60 encode sustained
-1:1 with the render clock** (NVENC at 54% on the 5090). Input: `--srt-input` ingests SRT/HEVC
-via NVDEC — decoded frames never touch the CPU (CUDA→Vulkan external memory) — verified by
-loopback (one switcher ingesting another's SRT program). Earlier: M2 (transitions/T-bar/
-NDI out/tally/multiview, 17.7 ms end-to-end), M1 (Vulkan engine, 2×8K zero-drop ingest),
-M0 (instrumentation + 8K bench). Next: M4 (audio mixer).
+Status: **M4 complete** — full audio mixer. Per-input NDI/SRT audio into 10 ms mixer ticks
+on the show clock (fader/mute/solo + 0–500 ms delay trims), audio-follow-video equal-power
+crossfade + FTB dip, −1 dBFS limiter, master A/V-sync delay, GUI meter strips. Embedded in
+the NDI program output (`send_audio_v3`) and as AAC in the SRT MPEG-TS. **Measured
+(flash+tone, both paths simultaneously): NDI av=+4.0 ms, SRT av=−2.1 ms** (gate ±10 ms),
+zero transition pops across all wipe types. Earlier: M3+M3.5 (SRT/HEVC both directions,
+8K60 NVENC 1:1), M2 (transitions/T-bar/NDI out/tally/multiview, 17.7 ms end-to-end),
+M1 (Vulkan engine, 2×8K zero-drop ingest), M0 (instrumentation + 8K bench).
+Next: M5 (8K hardening, two-box SpeedHQ bench).
 
 ```sh
 # SRT out (listener) + receive with any ffplay/OBS caller:
 ./build/mooswitcher --input CamA --input CamB --srt-out "srt://:9710?mode=listener&latency=120000"
 ffplay "srt://HOST:9710?mode=caller"     # latency option is MICROseconds
-# SRT ingest as an input:
+# SRT ingest as an input (audio decodes too; trim its lateness per input):
 ./build/mooswitcher --srt-input "srt://HOST:9710?mode=caller&latency=120000" --input CamB
+# A/V sync check on a TS capture (needs testgen content on program):
+ffmpeg -y -copyts -i "srt://HOST:9710?mode=caller" -c copy -avoid_negative_ts disabled \
+       -muxpreload 0 -muxdelay 0 -t 20 cap.ts && python scripts/av_offset_ts.py cap.ts
 ```
 
 Run it:
