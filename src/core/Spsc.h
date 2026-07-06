@@ -51,11 +51,18 @@ private:
 
 // Latest-value mailbox: producer overwrites, consumer reads the newest.
 // The sequence number increments per publish; consumers detect drops from
-// gaps and re-reads from equality. Mutex is fine at frame cadence: the
-// critical section is one small move/copy.
+// gaps and re-reads from equality. The last kKeep publishes are retained so
+// a consumer that finds the newest not-yet-usable (e.g. GPU upload still in
+// flight) can fall back a publish or two instead of taking nothing --
+// without this, a marginal producer/consumer phase turns into a steady
+// repeat+skip judder (one frame shown twice, the next never shown), and at
+// razor phases even one frame back can still be mid-DMA.
+// Mutex is fine at frame cadence: the critical section is a small copy.
 template <typename T>
 class LatestMailbox {
 public:
+    static constexpr int kKeep = 3;
+
     struct Item {
         T value;
         uint64_t seq;
@@ -63,7 +70,8 @@ public:
 
     void publish(T v) {
         std::lock_guard lk(m_);
-        slot_ = std::move(v);
+        for (int k = kKeep - 1; k > 0; --k) hist_[k] = std::move(hist_[k - 1]);
+        hist_[0] = std::move(v);
         ++seq_;
     }
 
@@ -71,7 +79,22 @@ public:
     std::optional<Item> takeNewer(uint64_t lastSeq) const {
         std::lock_guard lk(m_);
         if (seq_ == 0 || seq_ == lastSeq) return std::nullopt;
-        return Item{slot_, seq_};
+        return Item{hist_[0], seq_};
+    }
+
+    // Up to kKeep retained publishes newer than lastSeq, newest first.
+    // out must have room for kKeep items; returns the count written.
+    int takeNewerCandidates(uint64_t lastSeq, Item* out) const {
+        std::lock_guard lk(m_);
+        if (seq_ == 0 || seq_ == lastSeq) return 0;
+        int n = 0;
+        for (int k = 0; k < kKeep; ++k) {
+            if (seq_ < uint64_t(k) + 1) break;
+            const uint64_t s = seq_ - uint64_t(k);
+            if (s == lastSeq) break;
+            out[n++] = Item{hist_[k], s};
+        }
+        return n;
     }
 
     uint64_t seq() const {
@@ -81,7 +104,7 @@ public:
 
 private:
     mutable std::mutex m_;
-    T slot_{};
+    T hist_[kKeep]{};
     uint64_t seq_ = 0;
 };
 

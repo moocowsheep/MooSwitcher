@@ -18,9 +18,11 @@ namespace moo::gpu {
 // release (the destructor waits out its own timeline).
 class UploadRing {
 public:
-    // 4 slots: at 8K an upload occupies its slot for several ms of DMA, and
-    // render pins up to two more across frames-in-flight -- 3 leaves no slack.
-    static constexpr int kSlots = 4;
+    // 5 slots: at 8K an upload occupies its slot for several ms of DMA,
+    // render pins up to two more across frames-in-flight, and the input
+    // mailbox retains the previous publish for the late-upload fallback --
+    // 4 was the minimum before that retention existed (3 starved).
+    static constexpr int kSlots = 5;
 
     UploadRing(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQueue);
     ~UploadRing();

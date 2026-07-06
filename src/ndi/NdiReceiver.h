@@ -26,6 +26,9 @@ public:
     std::optional<Mailbox::Item> newer(uint64_t lastSeq) const override {
         return mailbox_.takeNewer(lastSeq);
     }
+    int newerCandidates(uint64_t lastSeq, Mailbox::Item* out) const override {
+        return mailbox_.takeNewerCandidates(lastSeq, out);
+    }
 
     Status status() const override;
     const std::string& matchName() const { return match_; }

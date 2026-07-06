@@ -13,7 +13,9 @@ namespace moo::gpu {
 // transfer queue. Same acquire/renderRef discipline as UploadRing.
 class Nv12Ring {
 public:
-    static constexpr int kSlots = 4;
+    // One extra over the pre-M5 four: the input mailbox retains the previous
+    // publish for the late-upload fallback (see LatestMailbox).
+    static constexpr int kSlots = 5;
 
     Nv12Ring(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQueue);
     ~Nv12Ring();

@@ -61,3 +61,29 @@ TEST_CASE("LatestMailbox keeps newest and reports seq") {
     REQUIRE(next->value == 40);
     REQUIRE(next->seq == 4);
 }
+
+TEST_CASE("LatestMailbox retains recent publishes as fallback candidates") {
+    LatestMailbox<int> mb;
+    LatestMailbox<int>::Item c[LatestMailbox<int>::kKeep];
+    REQUIRE(mb.takeNewerCandidates(0, c) == 0);
+
+    mb.publish(10);
+    REQUIRE(mb.takeNewerCandidates(0, c) == 1);
+    REQUIRE(c[0].value == 10);
+    REQUIRE(c[0].seq == 1);
+
+    mb.publish(20);
+    mb.publish(30);
+    mb.publish(40);
+    REQUIRE(mb.takeNewerCandidates(0, c) == 3);  // capped at kKeep
+    REQUIRE(c[0].value == 40);
+    REQUIRE(c[0].seq == 4);
+    REQUIRE(c[1].value == 30);
+    REQUIRE(c[2].value == 20);
+
+    // Already has seq 3: only the newest is newer.
+    REQUIRE(mb.takeNewerCandidates(3, c) == 1);
+    REQUIRE(c[0].value == 40);
+
+    REQUIRE(mb.takeNewerCandidates(4, c) == 0);  // fully caught up
+}
