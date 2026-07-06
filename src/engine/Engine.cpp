@@ -273,6 +273,22 @@ void Engine::renderLoop(std::stop_token st) {
     auto& skipCtr = Stats::counter("render.skips");
     auto& lateWaitCtr = Stats::counter("render.gpuLateWaits");
     auto& packSkipCtr = Stats::counter("out.ndi.packSlotBusy");
+    std::vector<Stats::Counter*> repeatCtr(static_cast<size_t>(N));
+    std::vector<Stats::Counter*> burstCtr(static_cast<size_t>(N));
+    std::vector<Stats::Counter*> lateCtr(static_cast<size_t>(N));
+    for (int i = 0; i < N; ++i) {
+        // repeats: tick reused the previous frame (nothing usable was newer);
+        // mailboxSkips: source outpaced us, latest-frame policy passed frames by;
+        // lateFallbacks: newest upload still in flight, showed the previous
+        // publish instead (the marginal-phase absorber -- without it a bad
+        // source/tick phase judders as steady repeat+skip pairs).
+        repeatCtr[size_t(i)] =
+            &Stats::counter("in" + std::to_string(i) + ".repeats");
+        burstCtr[size_t(i)] =
+            &Stats::counter("in" + std::to_string(i) + ".mailboxSkips");
+        lateCtr[size_t(i)] =
+            &Stats::counter("in" + std::to_string(i) + ".lateFallbacks");
+    }
 
     uint32_t lastTallyKey = 0xFFFFFFFF;
 
@@ -325,14 +341,28 @@ void Engine::renderLoop(std::stop_token st) {
             lastTallyKey = tallyKey;
         }
 
-        // -- refresh inputs (only completed uploads; latest-frame policy) --
+        // -- refresh inputs: newest COMPLETED upload (latest-frame policy;
+        //    falls back up to two publishes while the newest DMA is in flight) --
         for (int i = 0; i < N; ++i) {
-            if (auto item = inputs_[size_t(i)]->newer(seq[size_t(i)])) {
-                if ((*item->value).uploaded()) {
-                    cur[size_t(i)] = item->value;
-                    seq[size_t(i)] = item->seq;
-                    lastNewTick[size_t(i)] = n;
+            IInputSource::Mailbox::Item cand[IInputSource::Mailbox::kKeep];
+            const int nc = inputs_[size_t(i)]->newerCandidates(seq[size_t(i)], cand);
+            const IInputSource::Mailbox::Item* take = nullptr;
+            for (int k = 0; k < nc; ++k) {
+                if (cand[k].value && (*cand[k].value).uploaded()) {
+                    take = &cand[k];
+                    if (k > 0) lateCtr[size_t(i)]->add();
+                    break;
                 }
+            }
+            if (take) {
+                if (seq[size_t(i)] && take->seq > seq[size_t(i)] + 1)
+                    burstCtr[size_t(i)]->add(
+                        int64_t(take->seq - seq[size_t(i)] - 1));
+                cur[size_t(i)] = take->value;
+                seq[size_t(i)] = take->seq;
+                lastNewTick[size_t(i)] = n;
+            } else if (cur[size_t(i)]) {
+                repeatCtr[size_t(i)]->add();
             }
             if (cur[size_t(i)] && n - lastNewTick[size_t(i)] > staleTicks)
                 cur[size_t(i)].reset();  // no signal -> placeholder

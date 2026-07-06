@@ -1,5 +1,7 @@
 #include "ui/EngineBridge.h"
 
+#include "core/Stats.h"
+
 namespace moo::ui {
 
 namespace {
@@ -77,15 +79,21 @@ void EngineBridge::poll() {
                          .arg(engine_.renderedTicks())
                          .arg(engine_.skippedTicks())
                          .arg(engine_.ndiOutFrames());
+    if (auto* a = engine_.audio())
+        status += QStringLiteral("  aud[sk %1 un %2]")
+                      .arg(a->mixSkips())
+                      .arg(a->underruns());
     for (int i = 0; i < engine_.inputCount(); ++i) {
         const auto s = engine_.inputStatus(i);
-        status += QStringLiteral("   in%1: %2 %3x%4 f=%5 d=%6")
+        status += QStringLiteral("   in%1: %2 %3x%4 f=%5 d=%6 r=%7")
                       .arg(i)
                       .arg(s.connected ? QStringLiteral("up") : QStringLiteral("down"))
                       .arg(s.desc.width)
                       .arg(s.desc.height)
                       .arg(s.frames)
-                      .arg(s.drops);
+                      .arg(s.drops)
+                      .arg(Stats::counter("in" + std::to_string(i) + ".repeats")
+                               .value());
     }
     emit statusText(status);
 }

@@ -11,6 +11,7 @@
 #include "common/ppm.h"
 #include "core/Log.h"
 #include "core/MediaClock.h"
+#include "core/Stats.h"
 #include "engine/Engine.h"
 
 namespace {
@@ -158,5 +159,10 @@ int main(int argc, char** argv) {
     }
 
     engine.stop();
+
+    MOO_LOGI("-- final counters (nonzero) --");
+    for (const auto& s : moo::Stats::snapshot())
+        if (s.value)
+            MOO_LOGI("  %-28s %lld", s.name.c_str(), (long long)s.value);
     return 0;
 }
