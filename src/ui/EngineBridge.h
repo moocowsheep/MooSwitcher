@@ -29,10 +29,23 @@ public slots:
         engine_.post({Command::Type::SetTransition, type, durationTicks, softness});
     }
 
+    // Audio mixer controls: straight to the mixer atomics (thread-safe).
+    void setAudioGain(int input, float linearGain);
+    void setAudioMute(int input, bool on);
+    void setAudioSolo(int input, bool on);
+    void setAudioDelayMs(int input, int ms);
+    void setMasterDelayMs(int ms);
+
+public:
+    bool audioAvailable() const { return engine_.audio() != nullptr; }
+    int audioInputDelayMs(int input) const;
+    int masterDelayMs() const;
+
 signals:
     void multiviewFrame(QImage frame);
     void statusText(QString text);
     void stateChanged(int program, int preview, bool inTransition, bool ftb);
+    void audioLevels(QList<float> lr);  // per input L,R ... then master L,R
 
 private:
     void poll();

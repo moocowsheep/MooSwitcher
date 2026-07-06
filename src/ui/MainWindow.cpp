@@ -5,6 +5,8 @@
 #include <QShortcut>
 #include <QVBoxLayout>
 
+#include "ui/MixerPanel.h"
+
 namespace moo::ui {
 
 namespace {
@@ -94,6 +96,13 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     transRow->addWidget(transDur_);
     transRow->addStretch(1);
     leftCol->addLayout(transRow);
+
+    if (bridge_.audioAvailable()) {
+        auto* mixer = new MixerPanel(bridge_, inputNames);
+        leftCol->addWidget(mixer);
+        connect(&bridge_, &EngineBridge::audioLevels, mixer,
+                &MixerPanel::onLevels);
+    }
 
     status_ = new QLabel;
     status_->setStyleSheet(QStringLiteral("font-family: monospace;"));
