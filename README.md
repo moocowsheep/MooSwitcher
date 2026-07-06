@@ -4,9 +4,17 @@ A live video switcher for Linux + NVIDIA: NDI inputs, program/preview switching 
 transitions, NDI and SRT (HEVC/NVENC) program outputs, full audio mixer, Qt 6 GUI with
 Vulkan multiview. Built for low latency at up to 8K 59.94p.
 
-Status: **M0 complete** — core engine primitives (rational media clock, SPSC rings,
-switcher state machine), NDI test instrumentation (`moo-testgen`, `moo-latmeter`), and the
-8K throughput bench. See `docs/bench-m0.md`. Next: M1 (Vulkan engine + Qt multiview + cut).
+Status: **M1 complete** — Vulkan compute engine (fused-UYVY compositor, dual-DMA uploads,
+timeline-semaphore pipelining), NDI ingest with hot-plug/format-change survival, Qt multiview
+app with program/preview buses and cut. Verified live: 2× 8K inputs through an 8K show format
+at 59.94 with zero drops. Also: M0 instrumentation (`moo-testgen`/`moo-latmeter`) and the 8K
+bench (`docs/bench-m0.md`). Next: M2 (transitions, T-bar, NDI program out, tally, proxies).
+
+Run it:
+```sh
+./build/moo-testgen --name CamA &  ./build/moo-testgen --name CamB &
+./build/mooswitcher --input CamA --input CamB     # or moo-headless for no GUI
+```
 
 ## Build
 

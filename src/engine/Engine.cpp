@@ -27,9 +27,14 @@ bool Engine::start(const EngineConfig& cfg) {
     if (!createPlaceholder()) return false;
 
     finder_ = std::make_unique<NdiFinder>();
-    for (size_t i = 0; i < cfg_.inputs.size(); ++i)
-        inputs_.push_back(std::make_unique<NdiReceiver>(vk_, vk_.xferUp(), *finder_,
-                                                        cfg_.inputs[i], int(i)));
+    for (size_t i = 0; i < cfg_.inputs.size(); ++i) {
+        // Spread inputs across both DMA engines; serialized 66MB 8K copies on
+        // one queue otherwise hold ring slots in flight long enough to starve
+        // the ring. (Readback moves to xferDown in M2; sharing is fine.)
+        auto& q = (i % 2) ? vk_.xferDown() : vk_.xferUp();
+        inputs_.push_back(
+            std::make_unique<NdiReceiver>(vk_, q, *finder_, cfg_.inputs[i], int(i)));
+    }
 
     clock_ = MediaClock(cfg_.show.fpsN, cfg_.show.fpsD);
     renderThread_ = std::jthread([this](std::stop_token st) { renderLoop(st); });
