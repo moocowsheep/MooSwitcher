@@ -1,0 +1,32 @@
+#version 450
+// Downscale one source (packed UYVY or RGB) into an RGBA8 proxy with a 2x2
+// supersample of bilinear taps -- multiview never samples full-res frames.
+
+#include "ycbcr.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D srcTex;
+layout(binding = 1, rgba8) uniform writeonly image2D dstImg;
+
+layout(push_constant) uniform PC {
+    ivec2 dstUsed;   // written proxy extent
+    ivec2 srcFull;   // full-res luma size (UYVY mode)
+    int mode;        // 0 = UYVY packed, 1 = RGB texture
+    int cm;
+} pc;
+
+vec3 tap(vec2 uv) {
+    if (pc.mode == 0) return uyvy_sample_bilinear(srcTex, pc.srcFull, uv, pc.cm);
+    return texture(srcTex, uv).rgb;
+}
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(px, pc.dstUsed))) return;
+    vec2 inv = 1.0 / vec2(pc.dstUsed);
+    vec2 uv = (vec2(px) + 0.5) * inv;
+    vec3 c = tap(uv + vec2(-0.25, -0.25) * inv) + tap(uv + vec2(0.25, -0.25) * inv) +
+             tap(uv + vec2(-0.25, 0.25) * inv) + tap(uv + vec2(0.25, 0.25) * inv);
+    imageStore(dstImg, px, vec4(c * 0.25, 1.0));
+}

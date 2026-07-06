@@ -3,7 +3,9 @@
 
 namespace moo {
 
-enum class TransitionType : uint8_t { Mix = 0, WipeLR, WipeRL, WipeTB, WipeBT, WipeBox };
+enum class TransitionType : uint8_t {
+    Mix = 0, WipeLR, WipeRL, WipeTB, WipeBT, WipeBox, WipeCircle
+};
 
 // Everything the compositor needs to render one output frame.
 struct CompositeJob {

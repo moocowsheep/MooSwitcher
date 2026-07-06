@@ -78,7 +78,17 @@ void NdiReceiver::run(std::stop_token st) {
             lastVideoNs = MediaClock::nowNs();
             if (everConnected) reconnCtr.add();
             everConnected = true;
+            appliedTally_ = 0xFF;  // force tally re-send on the new connection
             MOO_LOGI("in%d: connecting to '%s'", index_, src->name.c_str());
+        }
+
+        if (const uint8_t want = tally_.load(std::memory_order_relaxed);
+            want != appliedTally_) {
+            NDIlib_tally_t t{};
+            t.on_program = want & 1;
+            t.on_preview = (want >> 1) & 1;
+            NDIlib_recv_set_tally(recv_, &t);
+            appliedTally_ = want;
         }
 
         NDIlib_video_frame_v2_t vf{};

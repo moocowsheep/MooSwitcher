@@ -1,4 +1,6 @@
 #pragma once
+#include <array>
+#include <atomic>
 #include <vector>
 
 #include "core/Format.h"
@@ -9,68 +11,123 @@
 namespace moo::gpu {
 
 // Compute pipelines + per-frame-in-flight targets:
-//   composite.comp:      inputs (UYVY) -> program RGBA16F
-//   multiview_tile.comp: one source -> one rect of the multiview RGBA8
-// plus the multiview -> host readback copy. All images stay in GENERAL.
+//   composite.comp:      inputs (UYVY) -> program RGBA16F (mix/wipes/FTB)
+//   pack_uyvy.comp:      program -> UYVY words (device buffer, for NDI out)
+//   proxy_down.comp:     inputs + program -> <=960x544 RGBA8 proxies
+//   multiview_tile.comp: proxies/labels/solid borders -> multiview RGBA8
+// plus multiview -> host readback and the pack -> host ring for the NDI
+// sender (4 slots: sender pins up to 2, one in DMA flight, one writable).
 class Compositor {
 public:
     static constexpr int kFramesInFlight = 2;
-    static constexpr int kReadbackSlots = 3;
+    static constexpr int kReadbackSlots = 3;   // multiview (GUI)
+    static constexpr int kPackSlots = 4;       // program UYVY (NDI out)
+    static constexpr int kProxyW = 960, kProxyH = 544;
+    static constexpr int kLabelRowH = 24;
 
-    Compositor(VkEngine& eng, const VideoFormatDesc& show, int mvW, int mvH);
+    Compositor(VkEngine& eng, const VideoFormatDesc& show, int mvW, int mvH,
+               int numInputs);
     ~Compositor();
 
     struct SourceRef {
-        const GpuFrame* frame = nullptr;  // UYVY input (nullptr = skip tile)
+        const GpuFrame* frame = nullptr;
     };
     struct TickJob {
-        const GpuFrame* a = nullptr;  // program bus source
-        const GpuFrame* b = nullptr;  // preview bus source (transition target)
-        CompositeJob sw;              // alpha/trans/ftb from SwitcherCore
-        std::vector<SourceRef> mvInputs;  // input row tiles, in order
-        const GpuFrame* preview = nullptr;  // PVW monitor tile
+        const GpuFrame* a = nullptr;   // program bus source (full res)
+        const GpuFrame* b = nullptr;   // preview bus source (full res)
+        CompositeJob sw;
+        std::vector<SourceRef> mvInputs;  // per input, frame or placeholder
+        int previewInputIdx = -1;         // input index on PVW bus (-1 = none)
+        int tallyPgmA = -1, tallyPgmB = -1, tallyPvw = -1;
+        bool packProgram = false;         // record UYVY pack (NDI out enabled)
     };
 
-    // Records dispatches + readback copy into cmd for frame-in-flight `fif`,
-    // targeting readback slot `rbSlot`.
     void record(VkCommandBuffer cmd, const TickJob& job, int fif, int rbSlot);
+    // Copy pack device buffer (fif) into host pack slot; runs on xferDown.
+    void recordDownCopy(VkCommandBuffer cmd, int fif, int packSlot);
 
+    // Multiview readback (GUI).
     const uint8_t* readbackPtr(int rbSlot) const {
         return static_cast<const uint8_t*>(readback_[rbSlot].mapped);
     }
     size_t readbackBytes() const { return size_t(mvW_) * mvH_ * 4; }
     int mvWidth() const { return mvW_; }
     int mvHeight() const { return mvH_; }
+
+    // Pack host ring (NDI sender).
+    const uint8_t* packPtr(int slot) const {
+        return static_cast<const uint8_t*>(packHost_[slot].mapped);
+    }
+    size_t packBytes() const { return show_.frameBytes(); }
+    std::atomic<uint64_t>& packStamp(int slot) { return packStamp_[slot]; }
+    std::atomic<bool>& packPinned(int slot) { return packPinned_[slot]; }
+
+    // Label atlas: rows 0=PGM, 1=PVW, 2+i=input i; usedWidths in pixels.
+    void setLabelAtlas(Image atlas, std::vector<int> usedWidths);
+
     const VideoFormatDesc& showFormat() const { return show_; }
 
 private:
     struct TilePC;
     struct CompositePC;
+    struct PackPC;
+    struct ProxyPC;
 
-    void createPipelines();
+    struct Pipe {
+        VkDescriptorSetLayout dsl = VK_NULL_HANDLE;
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        VkPipeline pipe = VK_NULL_HANDLE;
+    };
+    Pipe makePipe(const uint8_t* spv, size_t size,
+                  std::initializer_list<VkDescriptorType> bindings, uint32_t pcSize);
+    void destroyPipe(Pipe& p);
+
     void barrier(VkCommandBuffer cmd, VkImage img, VkPipelineStageFlags2 srcStage,
                  VkAccessFlags2 srcAccess, VkPipelineStageFlags2 dstStage,
                  VkAccessFlags2 dstAccess, VkImageLayout oldLayout,
                  VkImageLayout newLayout);
-    void dispatchTile(VkCommandBuffer cmd, VkImageView src, bool srcIsRgb,
-                      const VideoFormatDesc* srcDesc, int dstX, int dstY,
-                      int dstW, int dstH, int fif);
+    void memBarrier(VkCommandBuffer cmd, VkPipelineStageFlags2 srcStage,
+                    VkAccessFlags2 srcAccess, VkPipelineStageFlags2 dstStage,
+                    VkAccessFlags2 dstAccess);
+    void initImageOnce(VkCommandBuffer cmd, Image& img, uint8_t& flag);
+
+    void dispatchProxy(VkCommandBuffer cmd, VkImageView src, bool srcIsRgb,
+                       const VideoFormatDesc* srcDesc, Image& dst, int usedW,
+                       int usedH);
+    void dispatchTile(VkCommandBuffer cmd, VkImageView src, int mode,
+                      const float srcMap[4], const VideoFormatDesc* srcDesc,
+                      int dstX, int dstY, int dstW, int dstH, int fif);
+    void tileFromProxy(VkCommandBuffer cmd, const Image& proxy, int usedW,
+                       int usedH, int dstX, int dstY, int dstW, int dstH, int fif);
+    void labelTile(VkCommandBuffer cmd, int row, int dstX, int dstY, int dstW,
+                   int fif);
+    void borderTiles(VkCommandBuffer cmd, int x, int y, int w, int h,
+                     const float rgb[3], int fif);
+
+    // Per-input proxy used extent for a source format.
+    static void proxyUsed(const VideoFormatDesc& d, int& w, int& h);
 
     VkEngine& eng_;
     VideoFormatDesc show_;
-    int mvW_, mvH_;
+    int mvW_, mvH_, numInputs_;
 
     Image program_[kFramesInFlight];
     Image multiview_[kFramesInFlight];
-    bool targetsInitialized_[kFramesInFlight] = {};
-    Buffer readback_[kReadbackSlots];
+    Image programProxy_[kFramesInFlight];
+    std::vector<Image> inputProxy_[kFramesInFlight];  // [fif][input]
+    std::vector<uint8_t> proxyInit_[kFramesInFlight];
+    bool targetsInit_[kFramesInFlight] = {};
 
-    VkDescriptorSetLayout compositeDsl_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout tileDsl_ = VK_NULL_HANDLE;
-    VkPipelineLayout compositeLayout_ = VK_NULL_HANDLE;
-    VkPipelineLayout tileLayout_ = VK_NULL_HANDLE;
-    VkPipeline compositePipe_ = VK_NULL_HANDLE;
-    VkPipeline tilePipe_ = VK_NULL_HANDLE;
+    Buffer readback_[kReadbackSlots];
+    Buffer packDev_[kFramesInFlight];
+    Buffer packHost_[kPackSlots];
+    std::atomic<uint64_t> packStamp_[kPackSlots]{};
+    std::atomic<bool> packPinned_[kPackSlots]{};
+
+    Image labelAtlas_{};
+    std::vector<int> labelUsedW_;
+
+    Pipe composite_, tile_, pack_, proxy_;
 };
 
 }  // namespace moo::gpu

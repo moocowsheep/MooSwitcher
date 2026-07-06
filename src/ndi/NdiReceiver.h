@@ -38,6 +38,13 @@ public:
     Status status() const;
     const std::string& matchName() const { return match_; }
 
+    // Tally toward the source; applied on the capture thread (and re-applied
+    // after reconnects).
+    void setTally(bool onProgram, bool onPreview) {
+        tally_.store(uint8_t(onProgram | (onPreview << 1)),
+                     std::memory_order_relaxed);
+    }
+
 private:
     void run(std::stop_token st);
 
@@ -55,6 +62,8 @@ private:
     std::atomic<bool> connected_{false};
     std::atomic<int64_t> frames_{0};
     std::atomic<int64_t> drops_{0};
+    std::atomic<uint8_t> tally_{0};      // bit0 = program, bit1 = preview
+    uint8_t appliedTally_ = 0xFF;        // capture-thread local
     mutable std::mutex descM_;
     VideoFormatDesc desc_{};
 

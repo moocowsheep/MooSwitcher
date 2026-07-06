@@ -24,6 +24,7 @@ int main(int argc, char** argv) {
     std::string dumpDir;
     double dumpEvery = 2.0;
     bool scriptedCuts = false;
+    bool scriptedAutos = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -44,6 +45,10 @@ int main(int argc, char** argv) {
             if (v) dumpEvery = atof(v);
         } else if (a == "--cuts") {
             scriptedCuts = true;  // cut every 2 seconds
+        } else if (a == "--autos") {
+            scriptedAutos = true;  // auto-transition every 2.5s, cycling types
+        } else if (a == "--no-ndi-out") {
+            cfg.ndiOut = false;
         } else if (a == "--validate") {
             cfg.validation = true;
         } else {
@@ -70,6 +75,7 @@ int main(int argc, char** argv) {
     int64_t nextCutNs = t0 + 2'000'000'000;
     int64_t nextLogNs = t0 + 1'000'000'000;
     int dumpIdx = 0;
+    int transCycle = 1;  // start with WipeLR
 
     std::vector<uint8_t> mv;
     uint64_t mvSeq = 0;
@@ -80,8 +86,15 @@ int main(int argc, char** argv) {
         const int64_t now = moo::MediaClock::nowNs();
 
         if (scriptedCuts && now >= nextCutNs) {
-            engine.post({moo::Command::Type::Cut, 0});
+            engine.post({moo::Command::Type::Cut, 0, 0, 0.f});
             nextCutNs += 2'000'000'000;
+        }
+        if (scriptedAutos && now >= nextCutNs) {
+            // Cycle transition types (mix + all wipes), 45-frame duration.
+            engine.post({moo::Command::Type::SetTransition, transCycle % 7, 45, 0.05f});
+            engine.post({moo::Command::Type::Auto, 0, 0, 0.f});
+            ++transCycle;
+            nextCutNs += 2'500'000'000;
         }
         if (!dumpDir.empty() && now >= nextDumpNs) {
             if (engine.copyMultiview(mv, mvSeq, mvW, mvH)) {

@@ -191,6 +191,14 @@ int main(int argc, char** argv) {
                 lastCounter = int64_t(counter);
 
                 const double latMs = double(realtimeNs() - int64_t(sendNs)) / 1e6;
+                if (latMs < -1000.0 || latMs > 10'000.0) {
+                    // Blended strips can pass 8-bit parity by luck (~1/256)
+                    // during transitions; discard absurd timestamps.
+                    ++totalBad;
+                    ++winBad;
+                    NDIlib_recv_free_video_v2(recv, &vf);
+                    continue;
+                }
                 winLatSum += latMs;
                 winLatMin = std::min(winLatMin, latMs);
                 winLatMax = std::max(winLatMax, latMs);

@@ -10,20 +10,29 @@
 namespace moo::ui {
 
 // GUI-side adapter: commands in (queued to the engine), multiview frames and
-// stats out (30 Hz poll). No engine callbacks ever run on the GUI thread.
+// state out (30 Hz poll). No engine callbacks ever run on the GUI thread.
 class EngineBridge : public QObject {
     Q_OBJECT
 public:
     explicit EngineBridge(Engine& engine, QObject* parent = nullptr);
 
 public slots:
-    void setProgram(int src) { engine_.post({Command::Type::SetProgram, src}); }
-    void setPreview(int src) { engine_.post({Command::Type::SetPreview, src}); }
-    void cut() { engine_.post({Command::Type::Cut, 0}); }
+    void setProgram(int src) { engine_.post({Command::Type::SetProgram, src, 0, 0.f}); }
+    void setPreview(int src) { engine_.post({Command::Type::SetPreview, src, 0, 0.f}); }
+    void cut() { engine_.post({Command::Type::Cut, 0, 0, 0.f}); }
+    void autoTrans() { engine_.post({Command::Type::Auto, 0, 0, 0.f}); }
+    void fadeToBlack() { engine_.post({Command::Type::FadeToBlack, 0, 0, 0.f}); }
+    void tbarBegin() { engine_.post({Command::Type::TbarBegin, 0, 0, 0.f}); }
+    void tbarSet(float pos) { engine_.post({Command::Type::TbarSet, 0, 0, pos}); }
+    void tbarEnd() { engine_.post({Command::Type::TbarEnd, 0, 0, 0.f}); }
+    void setTransition(int type, int durationTicks, float softness) {
+        engine_.post({Command::Type::SetTransition, type, durationTicks, softness});
+    }
 
 signals:
     void multiviewFrame(QImage frame);
     void statusText(QString text);
+    void stateChanged(int program, int preview, bool inTransition, bool ftb);
 
 private:
     void poll();

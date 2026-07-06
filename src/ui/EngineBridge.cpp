@@ -16,9 +16,13 @@ void EngineBridge::poll() {
         emit multiviewFrame(img.copy());
     }
 
-    QString status = QStringLiteral("ticks %1  skips %2")
+    const auto st = engine_.uiState();
+    emit stateChanged(st.program, st.preview, st.inTransition, st.ftbEngaged);
+
+    QString status = QStringLiteral("ticks %1  skips %2  ndi-out %3")
                          .arg(engine_.renderedTicks())
-                         .arg(engine_.skippedTicks());
+                         .arg(engine_.skippedTicks())
+                         .arg(engine_.ndiOutFrames());
     for (int i = 0; i < engine_.inputCount(); ++i) {
         const auto s = engine_.inputStatus(i);
         status += QStringLiteral("   in%1: %2 %3x%4 f=%5 d=%6")

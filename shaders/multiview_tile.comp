@@ -14,14 +14,20 @@ layout(push_constant) uniform PC {
     ivec2 dstSize;
     ivec2 srcFull;   // full-res luma size (UYVY mode)
     ivec2 _pad;
-    vec4 srcMap;     // uvIn = uv * map.xy + map.zw
-    int mode;        // 0 = UYVY packed, 1 = RGB texture
+    vec4 srcMap;     // uvIn = uv * map.xy + map.zw  |  mode 2: rgb color in xyz
+    int mode;        // 0 = UYVY packed, 1 = RGB texture, 2 = solid color
     int cm;
 } pc;
 
 void main() {
     ivec2 lp = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(lp, pc.dstSize))) return;
+
+    if (pc.mode == 2) {  // solid fill (tally borders)
+        imageStore(dstImg, pc.dstOrigin + lp, vec4(pc.srcMap.xyz, 1.0));
+        return;
+    }
+
     vec2 uv = (vec2(lp) + 0.5) / vec2(pc.dstSize);
     vec2 uvi = uv * pc.srcMap.xy + pc.srcMap.zw;
 

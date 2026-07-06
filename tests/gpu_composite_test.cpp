@@ -47,12 +47,14 @@ TEST_CASE("composite + multiview convert BT.709 UYVY to expected RGB") {
     auto frame = std::make_shared<const gpu::GpuFrame>(ring, slot, upVal);
 
     const int mvW = 64, mvH = 36;
-    gpu::Compositor comp(eng, d, mvW, mvH);
+    gpu::Compositor comp(eng, d, mvW, mvH, 1);
 
     gpu::Compositor::TickJob tj;
     tj.a = frame.get();
     tj.b = frame.get();
-    tj.preview = frame.get();
+    tj.previewInputIdx = 0;
+    tj.tallyPgmA = 0;  // exercises the red border path
+    tj.packProgram = true;
     tj.mvInputs.push_back({frame.get()});
 
     VkCommandPool pool = eng.createCommandPool(eng.gfx().family);
@@ -77,6 +79,34 @@ TEST_CASE("composite + multiview convert BT.709 UYVY to expected RGB") {
     sd.signalInfos = {&sig, 1};
     REQUIRE(eng.submit(eng.gfx(), sd) == VK_SUCCESS);
     REQUIRE(tl.waitCompleted(v, 2'000'000'000));
+
+    // Pack readback: chained second submission (semaphore = memory visibility).
+    VkCommandBuffer cmd2 = VK_NULL_HANDLE;
+    vkAllocateCommandBuffers(eng.device(), &cai, &cmd2);
+    vkBeginCommandBuffer(cmd2, &bi);
+    comp.recordDownCopy(cmd2, 0, 0);
+    vkEndCommandBuffer(cmd2);
+    const uint64_t v2 = tl.reserve();
+    const VkSemaphoreSubmitInfo wait2 =
+        gpu::VkEngine::timelineWait(tl, v, VK_PIPELINE_STAGE_2_COPY_BIT);
+    const VkSemaphoreSubmitInfo sig2 =
+        gpu::VkEngine::timelineSignal(tl, v2, VK_PIPELINE_STAGE_2_COPY_BIT);
+    gpu::VkEngine::SubmitDesc sd2;
+    sd2.cmd = cmd2;
+    sd2.waits = {&wait2, 1};
+    sd2.signalInfos = {&sig2, 1};
+    REQUIRE(eng.submit(eng.gfx(), sd2) == VK_SUCCESS);
+    REQUIRE(tl.waitCompleted(v2, 2'000'000'000));
+
+    // UYVY pack roundtrip: flat 75% red must come back as (51,109,212) +-4.
+    {
+        const uint8_t* uyvy = comp.packPtr(0);
+        const size_t off = (size_t(d.height / 2) * d.width + d.width / 2) * 2 & ~3ULL;
+        CHECK(near(uyvy[off + 0], 109, 4));  // U
+        CHECK(near(uyvy[off + 1], 51, 4));   // Y0
+        CHECK(near(uyvy[off + 2], 212, 4));  // V
+        CHECK(near(uyvy[off + 3], 51, 4));   // Y1
+    }
 
     const uint8_t* rb = comp.readbackPtr(0);
     auto px = [&](int x, int y) { return rb + (size_t(y) * mvW + x) * 4; };

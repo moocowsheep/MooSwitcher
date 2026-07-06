@@ -97,6 +97,24 @@ inline bool readFlash(const uint8_t* buf, int strideBytes) {
     return sum / count > 127;
 }
 
+// Tally display row (y in [48,64)): red block when on-program, green block
+// when on-preview -- lets a receiver (or a human) verify tally end-to-end.
+constexpr int kTallyY = 48;
+constexpr int kTallyH = 16;
+constexpr int kTallyW = 128;
+
+inline void stampTally(uint8_t* buf, int strideBytes, bool pgm, bool pvw) {
+    if (pgm)  // 100% red, BT.709
+        fillRectUYVY(buf, strideBytes, 0, kTallyY, kTallyW, kTallyH, 63, 102, 240);
+    else
+        fillRectUYVY(buf, strideBytes, 0, kTallyY, kTallyW, kTallyH, 16, 128, 128);
+    if (pvw)  // 100% green, BT.709
+        fillRectUYVY(buf, strideBytes, kTallyW, kTallyY, kTallyW, kTallyH, 173, 42, 26);
+    else
+        fillRectUYVY(buf, strideBytes, kTallyW, kTallyY, kTallyW, kTallyH, 16, 128,
+                     128);
+}
+
 // BT.709 75% color bars (8 columns) below kPatternTop.
 inline void fillBars(uint8_t* buf, int strideBytes, int W, int H) {
     struct Yuv { uint8_t y, u, v; };

@@ -182,6 +182,10 @@ int main(int argc, char** argv) {
         pat::stampStrip(frame, strideBytes, pat::kTimeRow, uint64_t(realtimeNs()));
         pat::stampFlash(frame, strideBytes, n % pat::kFlashPeriodTicks == 0);
 
+        NDIlib_tally_t tally{};
+        NDIlib_send_get_tally(sender, &tally, 0);
+        pat::stampTally(frame, strideBytes, tally.on_program, tally.on_preview);
+
         vf.p_data = frame;
         vf.timecode = (t0Real + ideal.nsForTick(n)) / 100;  // 100ns units
         NDIlib_send_send_video_async_v2(sender, &vf);  // blocks only if encoder is behind

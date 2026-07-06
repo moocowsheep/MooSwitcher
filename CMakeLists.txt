@@ -43,6 +43,8 @@ function(moo_shader name src)
 endfunction()
 moo_shader(composite_comp composite.comp)
 moo_shader(multiview_tile_comp multiview_tile.comp)
+moo_shader(pack_uyvy_comp pack_uyvy.comp)
+moo_shader(proxy_down_comp proxy_down.comp)
 add_custom_target(moo_shaders DEPENDS ${MOO_SHADER_HDRS})
 
 add_library(moo_gpu STATIC
@@ -77,6 +79,7 @@ if(NDI_FOUND)
     src/engine/Engine.cpp
     src/ndi/NdiFinder.cpp
     src/ndi/NdiReceiver.cpp
+    src/out/NdiOutput.cpp
   )
   target_link_libraries(moo_engine PUBLIC moo_gpu moo_ndi)
   target_compile_options(moo_engine PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
