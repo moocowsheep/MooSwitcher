@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstring>
 
+#include "audio/AudioEngine.h"
 #include "core/Log.h"
 #include "core/MediaClock.h"
 #include "core/Stats.h"
@@ -144,7 +145,18 @@ void NdiReceiver::run(std::stop_token st) {
             frames_.fetch_add(1, std::memory_order_relaxed);
             frameCtr.add();
         } else if (ft == NDIlib_frame_type_audio) {
-            NDIlib_recv_free_audio_v3(recv_, &af);  // audio engine lands in M4
+            if (auto* ch = audioSink_.load(std::memory_order_acquire);
+                ch && af.FourCC == NDIlib_FourCC_audio_type_FLTP &&
+                af.no_channels > 0 && af.p_data) {
+                const float* l = reinterpret_cast<const float*>(af.p_data);
+                const float* r =
+                    af.no_channels > 1
+                        ? reinterpret_cast<const float*>(
+                              af.p_data + af.channel_stride_in_bytes)
+                        : l;  // mono: duplicate the plane
+                ch->pushPlanar(l, r, af.no_samples, af.sample_rate);
+            }
+            NDIlib_recv_free_audio_v3(recv_, &af);
         } else if (ft == NDIlib_frame_type_error) {
             connected_.store(false, std::memory_order_relaxed);
         } else {

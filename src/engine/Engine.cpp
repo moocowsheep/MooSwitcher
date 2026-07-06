@@ -84,7 +84,24 @@ bool Engine::start(const EngineConfig& cfg) {
         }
     }
 
+    if (cfg_.audio) {
+        audio_ = std::make_unique<audio::AudioEngine>(int(inputs_.size()));
+        audio_->masterDelayMs.store(
+            std::clamp(cfg_.masterAudioDelayMs, 0, audio::kMaxMasterDelayMs));
+        for (size_t i = 0; i < inputs_.size(); ++i)
+            inputs_[i]->attachAudioSink(&audio_->channel(int(i)));
+        if (ndiOut_)
+            audio_->addSink(
+                [out = ndiOut_.get()](const float* lr, int frames, int64_t s0) {
+                    out->sendAudio(lr, frames, s0);
+                });
+    }
+
+    // One origin for everything: video ticks, audio samples, and mux PTS all
+    // count from here (the audio thread starts on the same origin below).
     clock_ = MediaClock(cfg_.show.fpsN, cfg_.show.fpsD);
+    clock_.start();
+    if (audio_) audio_->start(clock_.originNs());
     renderThread_ = std::jthread([this](std::stop_token st) { renderLoop(st); });
     started_ = true;
     MOO_LOGI("engine started: show %dx%d @ %lld/%lld, %zu inputs, mv %dx%d, ndiOut=%s",
@@ -197,10 +214,11 @@ bool Engine::buildLabelAtlas() {
 void Engine::stop() {
     if (!started_) return;
     renderThread_ = {};  // request stop + join
+    inputs_.clear();     // capture threads stop writing the audio rings
+    finder_.reset();
+    audio_.reset();      // mixer stops; no more sink calls into the outputs
     srtOut_.reset();     // drains encoder, releases CUDA imports (device alive)
     ndiOut_.reset();     // stops sender before its buffers go away
-    inputs_.clear();
-    finder_.reset();
     if (renderTL_.lastReserved())
         renderTL_.waitCompleted(renderTL_.lastReserved(), 2'000'000'000);
     vkDeviceWaitIdle(vk_.device());
@@ -252,8 +270,9 @@ void Engine::renderLoop(std::stop_token st) {
 
     uint32_t lastTallyKey = 0xFFFFFFFF;
 
-    clock_.start();
-    int64_t n = 0;
+    // The clock was started in start() (audio shares the origin); the first
+    // few ticks may already be past, which sleepUntilTick treats as "go now".
+    int64_t n = clock_.currentTick();
 
     while (!st.stop_requested()) {
         clock_.sleepUntilTick(n);
@@ -276,6 +295,9 @@ void Engine::renderLoop(std::stop_token st) {
             }
         }
         const CompositeJob job = switcher_.tick(n);
+
+        if (audio_)  // audio follows video: crossfade along alpha, FTB dip
+            audio_->publishMix(job.programSrc, job.previewSrc, job.alpha, job.ftb);
 
         {
             std::lock_guard lk(uiM_);

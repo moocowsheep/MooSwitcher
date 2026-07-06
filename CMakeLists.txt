@@ -18,6 +18,8 @@ add_library(moo_core STATIC
   src/core/MediaClock.cpp
   src/core/Stats.cpp
   src/engine/SwitcherCore.cpp
+  src/audio/MixerCore.cpp
+  src/audio/AudioEngine.cpp
 )
 target_include_directories(moo_core PUBLIC src)
 target_link_libraries(moo_core PUBLIC Threads::Threads)
@@ -154,6 +156,7 @@ if(MOO_BUILD_TESTS)
     tests/ring_test.cpp
     tests/switcher_core_test.cpp
     tests/strip_test.cpp
+    tests/audio_test.cpp
     tests/gpu_composite_test.cpp
     tests/interop_test.cpp
   )

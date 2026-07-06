@@ -1,5 +1,6 @@
 #include "out/NdiOutput.h"
 
+#include "audio/MixerCore.h"
 #include "core/Log.h"
 #include "core/Stats.h"
 
@@ -27,6 +28,27 @@ NdiOutput::~NdiOutput() {
         NDIlib_send_send_video_async_v2(sender_, nullptr);  // release held buffer
         NDIlib_send_destroy(sender_);
     }
+}
+
+void NdiOutput::sendAudio(const float* lr, int frames, int64_t /*firstSample*/) {
+    if (!sender_ || frames <= 0) return;
+    audioScratch_.resize(size_t(frames) * 2);
+    float* l = audioScratch_.data();
+    float* r = l + frames;
+    for (int f = 0; f < frames; ++f) {
+        l[f] = lr[2 * f];
+        r[f] = lr[2 * f + 1];
+    }
+    NDIlib_audio_frame_v3_t af{};
+    af.sample_rate = audio::kSampleRate;
+    af.no_channels = 2;
+    af.no_samples = frames;
+    af.timecode = NDIlib_send_timecode_synthesize;
+    af.FourCC = NDIlib_FourCC_audio_type_FLTP;
+    af.p_data = reinterpret_cast<uint8_t*>(audioScratch_.data());
+    af.channel_stride_in_bytes = frames * int(sizeof(float));
+    NDIlib_send_send_audio_v3(sender_, &af);
+    audioSent_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void NdiOutput::run(std::stop_token st) {

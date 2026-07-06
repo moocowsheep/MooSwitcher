@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 
+#include "audio/AudioEngine.h"
 #include "core/Format.h"
 #include "core/MediaClock.h"
 #include "core/Spsc.h"
@@ -41,6 +42,8 @@ struct EngineConfig {
     std::string ndiOutName = "MooSwitcher PGM";
     std::string srtUrl;      // empty = SRT output off
     int srtBitrateKbps = 0;  // 0 = auto
+    bool audio = true;
+    int masterAudioDelayMs = 10;  // A/V calibration; measured in M4
 };
 
 // Owns the GPU, the NDI inputs and program output, the switcher state
@@ -72,6 +75,11 @@ public:
 
     int inputCount() const { return int(inputs_.size()); }
     InputStatus inputStatus(int i) const { return inputs_[i]->status(); }
+
+    // Audio mixer controls/meters (null when cfg.audio == false). Channel
+    // atomics and meters are safe to poke from the GUI thread.
+    audio::AudioEngine* audio() { return audio_.get(); }
+    const audio::AudioEngine* audio() const { return audio_.get(); }
     int64_t renderedTicks() const { return ticks_.load(std::memory_order_relaxed); }
     int64_t skippedTicks() const { return skips_.load(std::memory_order_relaxed); }
     int64_t ndiOutFrames() const;
@@ -91,6 +99,7 @@ private:
     std::unique_ptr<NdiOutput> ndiOut_;
     media::CudaCtx cuda_;
     std::unique_ptr<SrtOutput> srtOut_;
+    std::unique_ptr<audio::AudioEngine> audio_;
     std::array<uint64_t, gpu::Compositor::kFramesInFlight> nvPushed_{};
 
     std::shared_ptr<gpu::UploadRing> placeholderRing_;

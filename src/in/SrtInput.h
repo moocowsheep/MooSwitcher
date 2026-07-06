@@ -32,6 +32,10 @@ public:
     }
     Status status() const override;
 
+    void attachAudioSink(audio::InputChannel* ch) override {
+        audioSink_.store(ch, std::memory_order_release);
+    }
+
 private:
     void run(std::stop_token st);
     bool openStream();
@@ -55,6 +59,7 @@ private:
     media::CudaCtx::Imported imports_[gpu::Nv12Ring::kSlots]{};
 
     Mailbox mailbox_;
+    std::atomic<audio::InputChannel*> audioSink_{nullptr};
     std::atomic<bool> connected_{false};
     std::atomic<bool> stopFlag_{false};
     std::atomic<int64_t> frames_{0}, drops_{0};

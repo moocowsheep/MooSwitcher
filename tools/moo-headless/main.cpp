@@ -58,13 +58,19 @@ int main(int argc, char** argv) {
         } else if (a == "--srt-bitrate") {
             const char* v = next();
             if (v) cfg.srtBitrateKbps = atoi(v);
+        } else if (a == "--no-audio") {
+            cfg.audio = false;
+        } else if (a == "--audio-delay") {
+            const char* v = next();
+            if (v) cfg.masterAudioDelayMs = atoi(v);
         } else if (a == "--validate") {
             cfg.validation = true;
         } else {
             fprintf(stderr,
                     "usage: moo-headless --input NAME [--input NAME ...] "
                     "[--show WxH] [--duration S] [--dump-dir D] "
-                    "[--dump-every S] [--cuts] [--validate]\n");
+                    "[--dump-every S] [--cuts] [--no-audio] "
+                    "[--audio-delay MS] [--validate]\n");
             return 2;
         }
     }
@@ -120,6 +126,10 @@ int main(int argc, char** argv) {
         if (now >= nextLogNs) {
             std::string line = "ticks=" + std::to_string(engine.renderedTicks()) +
                                " skips=" + std::to_string(engine.skippedTicks());
+            if (auto* aud = engine.audio())
+                line += "  aud[t=" + std::to_string(aud->mixTicks()) +
+                        " sk=" + std::to_string(aud->mixSkips()) +
+                        " un=" + std::to_string(aud->underruns()) + "]";
             if (engine.srtFramesEncoded() || engine.srtConnected())
                 line += "  srt[" + std::string(engine.srtConnected() ? "up" : "down") +
                         " enc=" + std::to_string(engine.srtFramesEncoded()) + "]";

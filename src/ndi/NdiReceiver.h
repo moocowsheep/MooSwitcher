@@ -37,6 +37,10 @@ public:
                      std::memory_order_relaxed);
     }
 
+    void attachAudioSink(audio::InputChannel* ch) override {
+        audioSink_.store(ch, std::memory_order_release);
+    }
+
 private:
     void run(std::stop_token st);
 
@@ -50,6 +54,7 @@ private:
     NDIlib_recv_instance_t recv_ = nullptr;
     std::shared_ptr<gpu::UploadRing> ring_;
     Mailbox mailbox_;
+    std::atomic<audio::InputChannel*> audioSink_{nullptr};
 
     std::atomic<bool> connected_{false};
     std::atomic<int64_t> frames_{0};
