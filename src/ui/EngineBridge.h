@@ -36,16 +36,28 @@ public slots:
     void setAudioDelayMs(int input, int ms);
     void setMasterDelayMs(int ms);
 
+    // Source picker: srt:// refs become SRT inputs, anything else is an NDI
+    // name substring. Takes effect at the next render tick.
+    void replaceInput(int input, QString ref);
+
 public:
     bool audioAvailable() const { return engine_.audio() != nullptr; }
     int audioInputDelayMs(int input) const;
     int masterDelayMs() const;
+    float audioGain(int input) const;
+    bool audioMute(int input) const;
+    bool audioSolo(int input) const;
+    QStringList ndiSourceNames() const;
+    QString inputRef(int input) const;
+    int inputCount() const { return engine_.inputCount(); }
 
 signals:
     void multiviewFrame(QImage frame);
     void statusText(QString text);
     void stateChanged(int program, int preview, bool inTransition, bool ftb);
     void audioLevels(QList<float> lr);  // per input L,R ... then master L,R
+    void inputNamesChanged(QStringList refs);
+    void healthChanged(QStringList problems);  // empty = all good
 
 private:
     void poll();
@@ -54,6 +66,8 @@ private:
     QTimer timer_;
     std::vector<uint8_t> buf_;
     uint64_t seq_ = 0;
+    QStringList lastRefs_;
+    QStringList lastProblems_;
 };
 
 }  // namespace moo::ui

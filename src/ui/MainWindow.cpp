@@ -3,6 +3,7 @@
 #include <QHBoxLayout>
 #include <QKeySequence>
 #include <QShortcut>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include "ui/MixerPanel.h"
@@ -24,9 +25,11 @@ const char* kBtnFtbOn =
 }  // namespace
 
 MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
+                       ShowFile* showFile, const ShowFile::State* initial,
                        QWidget* parent)
-    : QMainWindow(parent), bridge_(bridge) {
+    : QMainWindow(parent), bridge_(bridge), showFile_(showFile) {
     setWindowTitle(QStringLiteral("MooSwitcher"));
+    if (initial) baseState_ = *initial;
 
     auto* central = new QWidget;
     auto* rootRow = new QHBoxLayout(central);
@@ -37,6 +40,17 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     leftCol->addWidget(multiview_, 1);
     connect(&bridge_, &EngineBridge::multiviewFrame, multiview_,
             &MultiviewWidget::setFrame);
+
+    banner_ = new QLabel;
+    banner_->setStyleSheet(QStringLiteral(
+        "background: #7a1010; color: white; font-weight: bold; padding: 4px;"));
+    banner_->hide();
+    leftCol->addWidget(banner_);
+    connect(&bridge_, &EngineBridge::healthChanged, this,
+            [this](const QStringList& problems) {
+                banner_->setText(problems.join(QStringLiteral("   |   ")));
+                banner_->setVisible(!problems.isEmpty());
+            });
 
     auto makeBusRow = [&](const QString& label, std::vector<QPushButton*>& store,
                           auto slot) {
@@ -90,19 +104,28 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
 
     transDur_ = new QSpinBox;
     transDur_->setRange(1, 600);
-    transDur_->setValue(30);
+    transDur_->setValue(initial ? initial->transDurTicks : 30);
     transDur_->setSuffix(QStringLiteral(" fr"));
     connect(transDur_, &QSpinBox::valueChanged, this, &MainWindow::pushTransition);
     transRow->addWidget(transDur_);
     transRow->addStretch(1);
     leftCol->addLayout(transRow);
+    if (initial && initial->transType > 0 &&
+        initial->transType < transType_->count())
+        transType_->setCurrentIndex(initial->transType);  // fires pushTransition
+    else
+        pushTransition();  // push duration either way
 
     if (bridge_.audioAvailable()) {
         auto* mixer = new MixerPanel(bridge_, inputNames);
         leftCol->addWidget(mixer);
         connect(&bridge_, &EngineBridge::audioLevels, mixer,
                 &MixerPanel::onLevels);
+        connect(&bridge_, &EngineBridge::inputNamesChanged, mixer,
+                &MixerPanel::onInputNames);
     }
+    connect(&bridge_, &EngineBridge::inputNamesChanged, this,
+            &MainWindow::onInputNames);
 
     status_ = new QLabel;
     status_->setStyleSheet(QStringLiteral("font-family: monospace;"));
@@ -128,13 +151,75 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
 
     new QShortcut(QKeySequence(Qt::Key_Space), this, [this] { bridge_.cut(); });
     new QShortcut(QKeySequence(Qt::Key_Return), this, [this] { bridge_.autoTrans(); });
+    new QShortcut(QKeySequence(Qt::Key_F), this, [this] { bridge_.fadeToBlack(); });
+    for (int i = 0; i < int(inputNames.size()) && i < 9; ++i) {
+        new QShortcut(QKeySequence(Qt::Key_1 + i), this,
+                      [this, i] { bridge_.setProgram(i); });
+        new QShortcut(QKeySequence(Qt::SHIFT | (Qt::Key_1 + i)), this,
+                      [this, i] { bridge_.setPreview(i); });
+    }
+
+    if (initial) {
+        bridge_.setProgram(initial->program);
+        bridge_.setPreview(initial->preview);
+    }
+
+    if (showFile_) {
+        lastSaved_ = baseState_;
+        auto* saver = new QTimer(this);
+        saver->setInterval(2000);
+        connect(saver, &QTimer::timeout, this, &MainWindow::saveShow);
+        saver->start();
+    }
 
     setCentralWidget(central);
     resize(1180, 800);
 }
 
+ShowFile::State MainWindow::collectState() const {
+    ShowFile::State st = baseState_;
+    st.cfg.inputs.clear();
+    for (int i = 0; i < bridge_.inputCount(); ++i) {
+        const std::string ref = bridge_.inputRef(i).toStdString();
+        st.cfg.inputs.push_back({ref.rfind("srt://", 0) == 0
+                                     ? InputSpec::Type::Srt
+                                     : InputSpec::Type::Ndi,
+                                 ref});
+    }
+    st.program = lastProgram_ < 0 ? 0 : lastProgram_;
+    st.preview = lastPreview_ < 0 ? 1 : lastPreview_;
+    st.transType = transType_->currentIndex();
+    st.transDurTicks = transDur_->value();
+    st.cfg.masterAudioDelayMs = bridge_.masterDelayMs();
+    st.chans.clear();
+    for (int i = 0; i < bridge_.inputCount(); ++i)
+        st.chans.push_back({bridge_.audioGain(i), bridge_.audioMute(i),
+                            bridge_.audioSolo(i), bridge_.audioInputDelayMs(i)});
+    return st;
+}
+
+void MainWindow::saveShow() {
+    if (!showFile_) return;
+    ShowFile::State st = collectState();
+    if (everSaved_ && st == lastSaved_) return;
+    showFile_->save(st);
+    lastSaved_ = std::move(st);
+    everSaved_ = true;
+}
+
 void MainWindow::pushTransition() {
     bridge_.setTransition(transType_->currentIndex(), transDur_->value(), 0.02f);
+}
+
+void MainWindow::onInputNames(const QStringList& refs) {
+    for (int i = 0; i < refs.size(); ++i) {
+        QString n = refs[i];
+        if (n.startsWith(QStringLiteral("srt://")))
+            n = QStringLiteral("SRT ") + n.mid(6);
+        const QString text = QStringLiteral("%1\n%2").arg(i + 1).arg(n.left(14));
+        if (i < int(pgmBtns_.size())) pgmBtns_[size_t(i)]->setText(text);
+        if (i < int(pvwBtns_.size())) pvwBtns_[size_t(i)]->setText(text);
+    }
 }
 
 void MainWindow::onState(int program, int preview, bool inTransition, bool ftb) {

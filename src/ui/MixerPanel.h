@@ -1,4 +1,5 @@
 #pragma once
+#include <QPushButton>
 #include <QWidget>
 
 #include <vector>
@@ -24,10 +25,10 @@ private:
     int holdAgeL_ = 0, holdAgeR_ = 0;
 };
 
-// The audio mixer surface: one strip per input (meter, fader, mute/solo,
-// delay trim) plus a master strip (meter + the A/V calibration delay).
-// Controls poke the engine's mixer atomics through the bridge; meters
-// update from the poll signal.
+// The audio mixer surface: one strip per input (source-picker header,
+// meter, fader, mute/solo, delay trim) plus a master strip (meter + the
+// A/V calibration delay). Controls poke the engine's mixer atomics through
+// the bridge; meters update from the poll signal.
 class MixerPanel : public QWidget {
     Q_OBJECT
 public:
@@ -36,9 +37,12 @@ public:
 
 public slots:
     void onLevels(QList<float> lr);  // [in0 L,R, in1 L,R, ..., master L,R]
+    void onInputNames(QStringList refs);
 
 private:
+    EngineBridge& bridge_;
     std::vector<MeterWidget*> meters_;
+    std::vector<QPushButton*> nameBtns_;
     MeterWidget* masterMeter_ = nullptr;
 };
 

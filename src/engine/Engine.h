@@ -62,6 +62,14 @@ public:
 
     void post(const Command& c) { cmds_.push(c); }
 
+    // Source picker: swap input `index` to a new source. The render thread
+    // performs the swap between ticks (placeholder until the new source
+    // delivers); the old input is destroyed on a detached thread. SRT specs
+    // require Vulkan/CUDA interop (initialized on demand; refused if absent).
+    void requestInputReplace(int index, InputSpec spec);
+    std::vector<NdiFinder::Source> ndiSources() const;
+    std::string inputRef(int i) const;  // current source ref (UI labels)
+
     bool copyMultiview(std::vector<uint8_t>& out, uint64_t& lastSeq, int& w, int& h);
 
     using InputStatus = IInputSource::Status;
@@ -89,6 +97,7 @@ public:
     int64_t ndiOutFrames() const;
     int64_t srtFramesEncoded() const;
     bool srtConnected() const;
+    bool srtConfigured() const { return srtOut_ != nullptr; }
 
 private:
     void renderLoop(std::stop_token st);
@@ -131,6 +140,9 @@ private:
 
     mutable std::mutex uiM_;
     UiState ui_;
+
+    mutable std::mutex replaceM_;  // pending replaces + current input specs
+    std::vector<std::pair<int, InputSpec>> pendingReplace_;
 
     std::jthread renderThread_;
     bool started_ = false;

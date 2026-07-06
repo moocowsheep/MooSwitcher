@@ -10,17 +10,30 @@
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
 
-    moo::EngineConfig cfg;
+    // The show file loads first; CLI flags override what they name.
+    QString showFilePath;
+    const QStringList args = app.arguments();
+    for (int i = 1; i < args.size() - 1; ++i)
+        if (args[i] == QStringLiteral("--show-file")) showFilePath = args[i + 1];
+    moo::ui::ShowFile showFile(showFilePath);
+    moo::ui::ShowFile::State show;
+    if (showFile.load(show))
+        MOO_LOGI("show restored from %s", showFile.path().toUtf8().constData());
+
+    moo::EngineConfig& cfg = show.cfg;
     QString shotPath;
     double shotDelayS = 6.0;
-    const QStringList args = app.arguments();
+    bool cliInputs = false;
+    auto addInput = [&](moo::InputSpec::Type t, const QString& ref) {
+        if (!cliInputs) cfg.inputs.clear();  // CLI replaces the stored set
+        cliInputs = true;
+        cfg.inputs.push_back({t, ref.toStdString()});
+    };
     for (int i = 1; i < args.size(); ++i) {
         if (args[i] == QStringLiteral("--input") && i + 1 < args.size())
-            cfg.inputs.push_back(
-                {moo::InputSpec::Type::Ndi, args[++i].toStdString()});
+            addInput(moo::InputSpec::Type::Ndi, args[++i]);
         else if (args[i] == QStringLiteral("--srt-input") && i + 1 < args.size())
-            cfg.inputs.push_back(
-                {moo::InputSpec::Type::Srt, args[++i].toStdString()});
+            addInput(moo::InputSpec::Type::Srt, args[++i]);
         else if (args[i] == QStringLiteral("--validate"))
             cfg.validation = true;
         else if (args[i] == QStringLiteral("--show") && i + 1 < args.size()) {
@@ -33,6 +46,8 @@ int main(int argc, char** argv) {
             cfg.srtUrl = args[++i].toStdString();
         else if (args[i] == QStringLiteral("--srt-bitrate") && i + 1 < args.size())
             cfg.srtBitrateKbps = args[++i].toInt();
+        else if (args[i] == QStringLiteral("--show-file"))
+            ++i;  // consumed above
         else if (args[i] == QStringLiteral("--screenshot") && i + 1 < args.size())
             shotPath = args[++i];  // grab the window after --shot-delay, quit
         else if (args[i] == QStringLiteral("--shot-delay") && i + 1 < args.size())
@@ -41,6 +56,7 @@ int main(int argc, char** argv) {
     if (cfg.inputs.empty())
         cfg.inputs = {{moo::InputSpec::Type::Ndi, "MooBenchA"},
                       {moo::InputSpec::Type::Ndi, "MooBenchB"}};
+    show.chans.resize(cfg.inputs.size());
 
     moo::Engine engine;
     if (!engine.start(cfg)) {
@@ -48,11 +64,23 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Control-surface and mixer state restore.
+    if (auto* aud = engine.audio())
+        for (int i = 0; i < aud->inputCount() && i < int(show.chans.size()); ++i) {
+            const auto& ch = show.chans[size_t(i)];
+            aud->channel(i).gain.store(ch.gain);
+            aud->channel(i).mute.store(ch.mute);
+            aud->channel(i).solo.store(ch.solo);
+            aud->channel(i).delayMs.store(ch.delayMs);
+        }
+
     QStringList names;
     for (const auto& n : cfg.inputs) names << QString::fromStdString(n.ref);
 
     moo::ui::EngineBridge bridge(engine);
-    moo::ui::MainWindow win(bridge, names);
+    moo::ui::MainWindow win(bridge, names, &showFile, &show);
+    QObject::connect(&app, &QApplication::aboutToQuit, &win,
+                     &moo::ui::MainWindow::saveShow);
     win.show();
 
     if (!shotPath.isEmpty()) {

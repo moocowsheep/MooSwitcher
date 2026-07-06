@@ -1,7 +1,11 @@
 #include "ui/MixerPanel.h"
 
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
 #include <QPainter>
 #include <QPushButton>
 #include <QSlider>
@@ -14,6 +18,58 @@
 namespace moo::ui {
 
 namespace {
+
+// Pick an NDI source from discovery or type an SRT URL / NDI name substring.
+class SourcePickerDialog : public QDialog {
+public:
+    SourcePickerDialog(EngineBridge& bridge, int input, QWidget* parent)
+        : QDialog(parent), bridge_(bridge) {
+        setWindowTitle(QStringLiteral("Input %1 source").arg(input + 1));
+        auto* col = new QVBoxLayout(this);
+
+        list_ = new QListWidget;
+        refresh();
+        col->addWidget(list_, 1);
+
+        auto* refreshBtn = new QPushButton(QStringLiteral("Refresh"));
+        connect(refreshBtn, &QPushButton::clicked, this,
+                [this] { refresh(); });
+        col->addWidget(refreshBtn);
+
+        col->addWidget(new QLabel(
+            QStringLiteral("...or NDI name substring / srt:// URL:")));
+        manual_ = new QLineEdit;
+        manual_->setPlaceholderText(
+            QStringLiteral("srt://host:9710?mode=caller&latency=120000"));
+        col->addWidget(manual_);
+
+        auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok |
+                                        QDialogButtonBox::Cancel);
+        connect(bb, &QDialogButtonBox::accepted, this, &QDialog::accept);
+        connect(bb, &QDialogButtonBox::rejected, this, &QDialog::reject);
+        connect(list_, &QListWidget::itemDoubleClicked, this,
+                &QDialog::accept);
+        col->addWidget(bb);
+        resize(420, 320);
+    }
+
+    QString chosen() const {
+        const QString manual = manual_->text().trimmed();
+        if (!manual.isEmpty()) return manual;
+        if (auto* item = list_->currentItem()) return item->text();
+        return {};
+    }
+
+private:
+    void refresh() {
+        list_->clear();
+        list_->addItems(bridge_.ndiSourceNames());
+    }
+
+    EngineBridge& bridge_;
+    QListWidget* list_ = nullptr;
+    QLineEdit* manual_ = nullptr;
+};
 
 float dbFor(float lin) { return lin > 1e-6f ? 20.f * std::log10(lin) : -120.f; }
 
@@ -81,7 +137,7 @@ void MeterWidget::paintEvent(QPaintEvent*) {
 
 MixerPanel::MixerPanel(EngineBridge& bridge, const QStringList& names,
                        QWidget* parent)
-    : QWidget(parent) {
+    : QWidget(parent), bridge_(bridge) {
     auto* row = new QHBoxLayout(this);
     row->setSpacing(10);
 
@@ -95,8 +151,20 @@ MixerPanel::MixerPanel(EngineBridge& bridge, const QStringList& names,
     };
 
     for (int i = 0; i < names.size(); ++i) {
-        auto* col = makeStrip(
+        auto* col = new QVBoxLayout;
+        auto* nameBtn = new QPushButton(
             QStringLiteral("%1 %2").arg(i + 1).arg(names[i].left(10)));
+        nameBtn->setFlat(true);
+        nameBtn->setStyleSheet(QStringLiteral("font-weight: bold;"));
+        nameBtn->setToolTip(QStringLiteral("Pick source for input %1").arg(i + 1));
+        nameBtn->setMaximumWidth(110);
+        connect(nameBtn, &QPushButton::clicked, this, [this, i] {
+            SourcePickerDialog dlg(bridge_, i, this);
+            if (dlg.exec() == QDialog::Accepted && !dlg.chosen().isEmpty())
+                bridge_.replaceInput(i, dlg.chosen());
+        });
+        nameBtns_.push_back(nameBtn);
+        col->addWidget(nameBtn, 0, Qt::AlignHCenter);
 
         auto* mid = new QHBoxLayout;
         auto* meter = new MeterWidget;
@@ -105,7 +173,10 @@ MixerPanel::MixerPanel(EngineBridge& bridge, const QStringList& names,
 
         auto* fader = new QSlider(Qt::Vertical);
         fader->setRange(-600, 100);  // tenths of dB; bottom = off
-        fader->setValue(0);
+        const float g0 = bridge.audioGain(i);
+        fader->setValue(g0 <= 0.001f
+                            ? -600
+                            : int(std::lround(200.f * std::log10(g0))));
         fader->setMinimumHeight(110);
         connect(fader, &QSlider::valueChanged, &bridge, [&bridge, i](int v) {
             const float lin =
@@ -118,12 +189,14 @@ MixerPanel::MixerPanel(EngineBridge& bridge, const QStringList& names,
         auto* btns = new QHBoxLayout;
         auto* mute = new QPushButton(QStringLiteral("M"));
         mute->setCheckable(true);
+        mute->setChecked(bridge.audioMute(i));
         mute->setStyleSheet(kSmallBtn);
         connect(mute, &QPushButton::toggled, &bridge,
                 [&bridge, i](bool on) { bridge.setAudioMute(i, on); });
         btns->addWidget(mute);
         auto* solo = new QPushButton(QStringLiteral("S"));
         solo->setCheckable(true);
+        solo->setChecked(bridge.audioSolo(i));
         solo->setStyleSheet(kSmallBtn);
         connect(solo, &QPushButton::toggled, &bridge,
                 [&bridge, i](bool on) { bridge.setAudioSolo(i, on); });
@@ -166,6 +239,16 @@ void MixerPanel::onLevels(QList<float> lr) {
     for (int i = 0; i < n; ++i)
         meters_[size_t(i)]->setLevels(lr[i * 2], lr[i * 2 + 1]);
     masterMeter_->setLevels(lr[n * 2], lr[n * 2 + 1]);
+}
+
+void MixerPanel::onInputNames(QStringList refs) {
+    for (int i = 0; i < int(nameBtns_.size()) && i < refs.size(); ++i) {
+        QString n = refs[i];
+        if (n.startsWith(QStringLiteral("srt://")))
+            n = QStringLiteral("SRT ") + n.mid(6);
+        nameBtns_[size_t(i)]->setText(
+            QStringLiteral("%1 %2").arg(i + 1).arg(n.left(10)));
+    }
 }
 
 }  // namespace moo::ui

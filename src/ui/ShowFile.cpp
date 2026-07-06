@@ -1,0 +1,132 @@
+#include "ui/ShowFile.h"
+
+#include <QDir>
+#include <QFileInfo>
+#include <QSettings>
+#include <QStandardPaths>
+
+namespace moo::ui {
+
+bool ShowFile::State::cfgEquals(const EngineConfig& a, const EngineConfig& b) {
+    if (a.inputs.size() != b.inputs.size()) return false;
+    for (size_t i = 0; i < a.inputs.size(); ++i)
+        if (a.inputs[i].type != b.inputs[i].type ||
+            a.inputs[i].ref != b.inputs[i].ref)
+            return false;
+    return a.show == b.show && a.ndiOut == b.ndiOut &&
+           a.ndiOutName == b.ndiOutName && a.srtUrl == b.srtUrl &&
+           a.srtBitrateKbps == b.srtBitrateKbps && a.audio == b.audio &&
+           a.masterAudioDelayMs == b.masterAudioDelayMs;
+}
+
+ShowFile::ShowFile(QString path) : path_(std::move(path)) {
+    if (path_.isEmpty())
+        path_ = QStandardPaths::writableLocation(
+                    QStandardPaths::AppConfigLocation) +
+                QStringLiteral("/show.ini");
+    QDir().mkpath(QFileInfo(path_).absolutePath());
+}
+
+bool ShowFile::exists() const { return QFileInfo::exists(path_); }
+
+bool ShowFile::load(State& st) const {
+    if (!exists()) return false;
+    QSettings s(path_, QSettings::IniFormat);
+
+    s.beginGroup(QStringLiteral("show"));
+    st.cfg.show.width = s.value("width", st.cfg.show.width).toInt();
+    st.cfg.show.height = s.value("height", st.cfg.show.height).toInt();
+    st.cfg.ndiOut = s.value("ndiOut", st.cfg.ndiOut).toBool();
+    st.cfg.ndiOutName =
+        s.value("ndiOutName", QString::fromStdString(st.cfg.ndiOutName))
+            .toString()
+            .toStdString();
+    st.cfg.srtUrl = s.value("srtOut", QString::fromStdString(st.cfg.srtUrl))
+                        .toString()
+                        .toStdString();
+    st.cfg.srtBitrateKbps =
+        s.value("srtBitrateKbps", st.cfg.srtBitrateKbps).toInt();
+    st.cfg.audio = s.value("audio", st.cfg.audio).toBool();
+    st.cfg.masterAudioDelayMs =
+        s.value("masterDelayMs", st.cfg.masterAudioDelayMs).toInt();
+    s.endGroup();
+
+    const int n = s.beginReadArray(QStringLiteral("inputs"));
+    if (n > 0) st.cfg.inputs.clear();
+    for (int i = 0; i < n; ++i) {
+        s.setArrayIndex(i);
+        InputSpec spec;
+        spec.type = s.value("type").toString() == QStringLiteral("srt")
+                        ? InputSpec::Type::Srt
+                        : InputSpec::Type::Ndi;
+        spec.ref = s.value("ref").toString().toStdString();
+        st.cfg.inputs.push_back(std::move(spec));
+    }
+    s.endArray();
+
+    s.beginGroup(QStringLiteral("switcher"));
+    st.program = s.value("program", st.program).toInt();
+    st.preview = s.value("preview", st.preview).toInt();
+    st.transType = s.value("transType", st.transType).toInt();
+    st.transDurTicks = s.value("transDurTicks", st.transDurTicks).toInt();
+    s.endGroup();
+
+    st.chans.assign(st.cfg.inputs.size(), ChannelState{});
+    const int c = s.beginReadArray(QStringLiteral("audioChannels"));
+    for (int i = 0; i < c && i < int(st.chans.size()); ++i) {
+        s.setArrayIndex(i);
+        auto& ch = st.chans[size_t(i)];
+        ch.gain = s.value("gain", ch.gain).toFloat();
+        ch.mute = s.value("mute", ch.mute).toBool();
+        ch.solo = s.value("solo", ch.solo).toBool();
+        ch.delayMs = s.value("delayMs", ch.delayMs).toInt();
+    }
+    s.endArray();
+    return true;
+}
+
+void ShowFile::save(const State& st) const {
+    QSettings s(path_, QSettings::IniFormat);
+
+    s.beginGroup(QStringLiteral("show"));
+    s.setValue("width", st.cfg.show.width);
+    s.setValue("height", st.cfg.show.height);
+    s.setValue("ndiOut", st.cfg.ndiOut);
+    s.setValue("ndiOutName", QString::fromStdString(st.cfg.ndiOutName));
+    s.setValue("srtOut", QString::fromStdString(st.cfg.srtUrl));
+    s.setValue("srtBitrateKbps", st.cfg.srtBitrateKbps);
+    s.setValue("audio", st.cfg.audio);
+    s.setValue("masterDelayMs", st.cfg.masterAudioDelayMs);
+    s.endGroup();
+
+    s.beginWriteArray(QStringLiteral("inputs"), int(st.cfg.inputs.size()));
+    for (int i = 0; i < int(st.cfg.inputs.size()); ++i) {
+        s.setArrayIndex(i);
+        const auto& spec = st.cfg.inputs[size_t(i)];
+        s.setValue("type", spec.type == InputSpec::Type::Srt
+                               ? QStringLiteral("srt")
+                               : QStringLiteral("ndi"));
+        s.setValue("ref", QString::fromStdString(spec.ref));
+    }
+    s.endArray();
+
+    s.beginGroup(QStringLiteral("switcher"));
+    s.setValue("program", st.program);
+    s.setValue("preview", st.preview);
+    s.setValue("transType", st.transType);
+    s.setValue("transDurTicks", st.transDurTicks);
+    s.endGroup();
+
+    s.beginWriteArray(QStringLiteral("audioChannels"), int(st.chans.size()));
+    for (int i = 0; i < int(st.chans.size()); ++i) {
+        s.setArrayIndex(i);
+        const auto& ch = st.chans[size_t(i)];
+        s.setValue("gain", double(ch.gain));
+        s.setValue("mute", ch.mute);
+        s.setValue("solo", ch.solo);
+        s.setValue("delayMs", ch.delayMs);
+    }
+    s.endArray();
+}
+
+}  // namespace moo::ui

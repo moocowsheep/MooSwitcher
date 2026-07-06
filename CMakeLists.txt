@@ -129,6 +129,8 @@ if(NDI_FOUND)
       src/ui/EngineBridge.h
       src/ui/MixerPanel.cpp
       src/ui/MixerPanel.h
+      src/ui/ShowFile.cpp
+      src/ui/ShowFile.h
     )
     set_target_properties(mooswitcher PROPERTIES
       AUTOMOC ON

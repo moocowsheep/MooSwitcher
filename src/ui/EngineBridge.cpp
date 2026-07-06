@@ -52,6 +52,40 @@ int EngineBridge::masterDelayMs() const {
     return a ? a->masterDelayMs.load(std::memory_order_relaxed) : 0;
 }
 
+float EngineBridge::audioGain(int input) const {
+    auto* c = chan(engine_, input);
+    return c ? c->gain.load(std::memory_order_relaxed) : 1.f;
+}
+
+bool EngineBridge::audioMute(int input) const {
+    auto* c = chan(engine_, input);
+    return c && c->mute.load(std::memory_order_relaxed);
+}
+
+bool EngineBridge::audioSolo(int input) const {
+    auto* c = chan(engine_, input);
+    return c && c->solo.load(std::memory_order_relaxed);
+}
+
+void EngineBridge::replaceInput(int input, QString ref) {
+    const std::string r = ref.toStdString();
+    const bool srt = r.rfind("srt://", 0) == 0;
+    engine_.requestInputReplace(
+        input,
+        {srt ? InputSpec::Type::Srt : InputSpec::Type::Ndi, r});
+}
+
+QStringList EngineBridge::ndiSourceNames() const {
+    QStringList out;
+    for (const auto& s : engine_.ndiSources())
+        out << QString::fromStdString(s.name);
+    return out;
+}
+
+QString EngineBridge::inputRef(int input) const {
+    return QString::fromStdString(engine_.inputRef(input));
+}
+
 void EngineBridge::poll() {
     int w = 0, h = 0;
     if (engine_.copyMultiview(buf_, seq_, w, h)) {
@@ -62,6 +96,25 @@ void EngineBridge::poll() {
 
     const auto st = engine_.uiState();
     emit stateChanged(st.program, st.preview, st.inTransition, st.ftbEngaged);
+
+    QStringList refs;
+    for (int i = 0; i < engine_.inputCount(); ++i)
+        refs << QString::fromStdString(engine_.inputRef(i));
+    if (refs != lastRefs_) {
+        lastRefs_ = refs;
+        emit inputNamesChanged(refs);
+    }
+
+    QStringList problems;
+    for (int i = 0; i < engine_.inputCount(); ++i)
+        if (!engine_.inputStatus(i).connected)
+            problems << QStringLiteral("IN%1 no signal").arg(i + 1);
+    if (engine_.srtConfigured() && !engine_.srtConnected())
+        problems << QStringLiteral("SRT out down (reconnecting)");
+    if (problems != lastProblems_) {
+        lastProblems_ = problems;
+        emit healthChanged(problems);
+    }
 
     if (auto* a = engine_.audio()) {
         QList<float> lv;

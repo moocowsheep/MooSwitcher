@@ -22,6 +22,21 @@ int64_t Engine::srtFramesEncoded() const {
 }
 bool Engine::srtConnected() const { return srtOut_ && srtOut_->connected(); }
 
+void Engine::requestInputReplace(int index, InputSpec spec) {
+    std::lock_guard lk(replaceM_);
+    pendingReplace_.emplace_back(index, std::move(spec));
+}
+
+std::vector<NdiFinder::Source> Engine::ndiSources() const {
+    return finder_ ? finder_->snapshot() : std::vector<NdiFinder::Source>{};
+}
+
+std::string Engine::inputRef(int i) const {
+    std::lock_guard lk(replaceM_);
+    if (i < 0 || i >= int(cfg_.inputs.size())) return {};
+    return cfg_.inputs[size_t(i)].ref;
+}
+
 bool Engine::start(const EngineConfig& cfg) {
     cfg_ = cfg;
     if (!vk_.init(cfg.validation)) return false;
@@ -316,6 +331,61 @@ void Engine::renderLoop(std::stop_token st) {
                     break;
             }
         }
+        // -- source picker: swap inputs between ticks --
+        {
+            std::vector<std::pair<int, InputSpec>> reps;
+            {
+                std::lock_guard lk(replaceM_);
+                reps.swap(pendingReplace_);
+            }
+            bool relabel = false;
+            for (auto& [idx, spec] : reps) {
+                if (idx < 0 || idx >= N) continue;
+                if (spec.type == InputSpec::Type::Srt && !cuda_.ok()) {
+                    // One-time on-demand interop bring-up (a user action; the
+                    // stall is bounded and counted as skips if it overruns).
+                    if (!vk_.hasExternalMemoryFd || !cuda_.init(vk_.deviceUuid())) {
+                        MOO_LOGE("in%d: SRT source needs Vulkan/CUDA interop; "
+                                 "replace refused", idx);
+                        continue;
+                    }
+                }
+                auto old = std::move(inputs_[size_t(idx)]);
+                auto& q = (idx % 2) ? vk_.xferDown() : vk_.xferUp();
+                if (spec.type == InputSpec::Type::Srt)
+                    inputs_[size_t(idx)] =
+                        std::make_unique<SrtInput>(vk_, q, cuda_, spec.ref, idx);
+                else
+                    inputs_[size_t(idx)] = std::make_unique<NdiReceiver>(
+                        vk_, q, *finder_, spec.ref, idx);
+                if (audio_)
+                    inputs_[size_t(idx)]->attachAudioSink(&audio_->channel(idx));
+                cur[size_t(idx)].reset();  // placeholder until first frame
+                seq[size_t(idx)] = 0;
+                lastNewTick[size_t(idx)] = n - staleTicks - 1;
+                {
+                    std::lock_guard lk(replaceM_);
+                    cfg_.inputs[size_t(idx)] = spec;
+                }
+                relabel = true;
+                MOO_LOGI("in%d: replaced with '%s'%s", idx, spec.ref.c_str(),
+                         spec.type == InputSpec::Type::Srt ? " (srt)" : "");
+                // The dtor joins the capture thread (bounded by its receive
+                // timeout) -- never on the render thread.
+                std::thread([o = std::move(old)]() mutable { o.reset(); })
+                    .detach();
+            }
+            if (relabel) {
+                // The old atlas may still be sampled by in-flight ticks; a
+                // few-ms drain on a user action is fine (counted if it skips).
+                if (renderTL_.lastReserved())
+                    renderTL_.waitCompleted(renderTL_.lastReserved(),
+                                            1'000'000'000);
+                if (!buildLabelAtlas()) MOO_LOGE("label atlas rebuild failed");
+                lastTallyKey = 0xFFFFFFFF;  // re-send tally to the new source
+            }
+        }
+
         const CompositeJob job = switcher_.tick(n);
 
         if (audio_)  // audio follows video: crossfade along alpha, FTB dip

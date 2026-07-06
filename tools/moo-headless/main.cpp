@@ -27,6 +27,13 @@ int main(int argc, char** argv) {
     bool scriptedCuts = false;
     bool scriptedAutos = false;
     std::vector<std::pair<int, int>> inputDelays;  // {input, ms} audio trims
+    struct Replace {
+        double afterS;
+        int idx;
+        std::string ref;
+        bool done = false;
+    };
+    std::vector<Replace> replaces;  // --replace-after S:IDX:REF
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -70,6 +77,13 @@ int main(int argc, char** argv) {
             int idx = 0, ms = 0;
             if (!v || sscanf(v, "%d:%d", &idx, &ms) != 2) return 2;
             inputDelays.emplace_back(idx, ms);
+        } else if (a == "--replace-after") {
+            const char* v = next();
+            double s = 0;
+            int idx = 0, off = 0;
+            if (!v || sscanf(v, "%lf:%d:%n", &s, &idx, &off) != 2 || !v[off])
+                return 2;
+            replaces.push_back({s, idx, std::string(v + off)});
         } else if (a == "--validate") {
             cfg.validation = true;
         } else {
@@ -116,6 +130,16 @@ int main(int argc, char** argv) {
         if (scriptedCuts && now >= nextCutNs) {
             engine.post({moo::Command::Type::Cut, 0, 0, 0.f});
             nextCutNs += 2'000'000'000;
+        }
+        for (auto& r : replaces) {
+            if (!r.done && now >= t0 + int64_t(r.afterS * 1e9)) {
+                r.done = true;
+                const bool srt = r.ref.rfind("srt://", 0) == 0;
+                engine.requestInputReplace(
+                    r.idx, {srt ? moo::InputSpec::Type::Srt
+                                : moo::InputSpec::Type::Ndi,
+                            r.ref});
+            }
         }
         if (scriptedAutos && now >= nextCutNs) {
             // Cycle transition types (mix + all wipes), 45-frame duration.
