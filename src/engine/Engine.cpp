@@ -77,7 +77,8 @@ bool Engine::start(const EngineConfig& cfg) {
     if (!cfg_.srtUrl.empty()) {
         srtOut_ = std::make_unique<SrtOutput>(
             vk_, cuda_, *comp_, renderTL_,
-            SrtOutConfig{cfg_.srtUrl, cfg_.srtBitrateKbps}, cfg_.show);
+            SrtOutConfig{cfg_.srtUrl, cfg_.srtBitrateKbps}, cfg_.show,
+            cfg_.audio);
         if (!srtOut_->ok()) {
             MOO_LOGE("SRT out init failed; disabling");
             srtOut_.reset();
@@ -94,6 +95,11 @@ bool Engine::start(const EngineConfig& cfg) {
             audio_->addSink(
                 [out = ndiOut_.get()](const float* lr, int frames, int64_t s0) {
                     out->sendAudio(lr, frames, s0);
+                });
+        if (srtOut_)
+            audio_->addSink(
+                [out = srtOut_.get()](const float* lr, int frames, int64_t s0) {
+                    out->pushAudio(lr, frames, s0);
                 });
     }
 

@@ -43,6 +43,8 @@ public:
     std::atomic<int64_t> pushedFrames{0}, droppedFrames{0};
     std::atomic<int64_t> underruns{0}, trimmedFrames{0}, badRateFrames{0};
 
+    size_t ringFillSamples() const { return ring_.fill(); }
+
 private:
     friend class AudioEngine;
     AudioRing ring_;

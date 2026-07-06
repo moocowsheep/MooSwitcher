@@ -77,6 +77,7 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavformat libavut
 add_library(moo_media STATIC
   src/media/CudaCtx.cpp
   src/media/FfmpegNvenc.cpp
+  src/media/AacEncoder.cpp
 )
 target_link_libraries(moo_media PUBLIC moo_gpu CudaDriver PkgConfig::FFMPEG)
 target_compile_options(moo_media PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
@@ -157,6 +158,7 @@ if(MOO_BUILD_TESTS)
     tests/switcher_core_test.cpp
     tests/strip_test.cpp
     tests/audio_test.cpp
+    tests/aac_test.cpp
     tests/gpu_composite_test.cpp
     tests/interop_test.cpp
   )

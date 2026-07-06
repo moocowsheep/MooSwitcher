@@ -43,7 +43,7 @@ struct EngineConfig {
     std::string srtUrl;      // empty = SRT output off
     int srtBitrateKbps = 0;  // 0 = auto
     bool audio = true;
-    int masterAudioDelayMs = 10;  // A/V calibration; measured in M4
+    int masterAudioDelayMs = 5;  // A/V calibration: centers NDI & SRT paths
 };
 
 // Owns the GPU, the NDI inputs and program output, the switcher state

@@ -92,9 +92,37 @@ void NdiReceiver::run(std::stop_token st) {
             appliedTally_ = want;
         }
 
+        auto pushAudio = [this](const NDIlib_audio_frame_v3_t& a) {
+            auto* ch = audioSink_.load(std::memory_order_acquire);
+            if (!ch || a.FourCC != NDIlib_FourCC_audio_type_FLTP ||
+                a.no_channels <= 0 || !a.p_data)
+                return;
+            const float* l = reinterpret_cast<const float*>(a.p_data);
+            const float* r =
+                a.no_channels > 1
+                    ? reinterpret_cast<const float*>(a.p_data +
+                                                     a.channel_stride_in_bytes)
+                    : l;  // mono: duplicate the plane
+            ch->pushPlanar(l, r, a.no_samples, a.sample_rate);
+        };
+
         NDIlib_video_frame_v2_t vf{};
         NDIlib_audio_frame_v3_t af{};
         const auto ft = NDIlib_recv_capture_v3(recv_, &vf, &af, nullptr, 500);
+
+        // Drain the SDK's audio queue greedily every pass. The main capture
+        // returns one frame per call at video pace while the SDK queues audio
+        // without dropping, so any startup backlog would otherwise persist
+        // forever (arrival and consume rates match) and play out as a fixed
+        // A/V offset. Video is drop-to-latest; audio must be pulled dry.
+        {
+            NDIlib_audio_frame_v3_t extra{};
+            while (NDIlib_recv_capture_v3(recv_, nullptr, &extra, nullptr, 0) ==
+                   NDIlib_frame_type_audio) {
+                pushAudio(extra);
+                NDIlib_recv_free_audio_v3(recv_, &extra);
+            }
+        }
 
         if (ft == NDIlib_frame_type_video) {
             lastVideoNs = MediaClock::nowNs();
@@ -145,17 +173,7 @@ void NdiReceiver::run(std::stop_token st) {
             frames_.fetch_add(1, std::memory_order_relaxed);
             frameCtr.add();
         } else if (ft == NDIlib_frame_type_audio) {
-            if (auto* ch = audioSink_.load(std::memory_order_acquire);
-                ch && af.FourCC == NDIlib_FourCC_audio_type_FLTP &&
-                af.no_channels > 0 && af.p_data) {
-                const float* l = reinterpret_cast<const float*>(af.p_data);
-                const float* r =
-                    af.no_channels > 1
-                        ? reinterpret_cast<const float*>(
-                              af.p_data + af.channel_stride_in_bytes)
-                        : l;  // mono: duplicate the plane
-                ch->pushPlanar(l, r, af.no_samples, af.sample_rate);
-            }
+            pushAudio(af);
             NDIlib_recv_free_audio_v3(recv_, &af);
         } else if (ft == NDIlib_frame_type_error) {
             connected_.store(false, std::memory_order_relaxed);
