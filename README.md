@@ -4,11 +4,13 @@ A live video switcher for Linux + NVIDIA: NDI inputs, program/preview switching 
 transitions, NDI and SRT (HEVC/NVENC) program outputs, full audio mixer, Qt 6 GUI with
 Vulkan multiview. Built for low latency at up to 8K 59.94p.
 
-Status: **M1 complete** — Vulkan compute engine (fused-UYVY compositor, dual-DMA uploads,
-timeline-semaphore pipelining), NDI ingest with hot-plug/format-change survival, Qt multiview
-app with program/preview buses and cut. Verified live: 2× 8K inputs through an 8K show format
-at 59.94 with zero drops. Also: M0 instrumentation (`moo-testgen`/`moo-latmeter`) and the 8K
-bench (`docs/bench-m0.md`). Next: M2 (transitions, T-bar, NDI program out, tally, proxies).
+Status: **M2 complete** — a real switcher: mix + 5 wipes + FTB with AUTO and a T-bar, the
+**NDI program output** (GPU UYVY pack → SDK encodes from our readback ring), tally to sources
+(and back — testgen displays it), and a proper multiview (proxy-downscaled tiles, labels from
+an embedded font, tally borders). Measured end-to-end latency through the full chain
+(NDI in → composite → NDI out): **17.7 ms ≈ 1 frame** at 1080p59.94. Earlier: M1 (Vulkan
+engine, 2×8K zero-drop ingest), M0 (instrumentation + 8K bench, `docs/bench-m0.md`).
+Next: M3 (SRT output via NVENC/HEVC).
 
 Run it:
 ```sh

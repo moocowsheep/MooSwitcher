@@ -6,6 +6,7 @@
 #include "core/Log.h"
 #include "shaders/composite_comp.spv.h"
 #include "shaders/multiview_tile_comp.spv.h"
+#include "shaders/pack_nv12_comp.spv.h"
 #include "shaders/pack_uyvy_comp.spv.h"
 #include "shaders/proxy_down_comp.spv.h"
 
@@ -13,7 +14,7 @@ namespace moo::gpu {
 
 // C++ mirrors of the GLSL push-constant blocks (std430 offsets).
 struct Compositor::CompositePC {
-    int32_t outW, outH, aW, aH, bW, bH, padX, padY;
+    int32_t outW, outH, aW, aH, bW, bH, aFmt, bFmt;
     float aMap[4], bMap[4];
     float alpha, softness, ftb;
     int32_t transType, aCm, bCm;
@@ -91,6 +92,10 @@ Compositor::Compositor(VkEngine& eng, const VideoFormatDesc& show, int mvW,
             show_.frameBytes(),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        packNvDev_[f] = eng_.createBuffer(
+            nvPackBytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, 0,
+            /*exportable=*/eng_.hasExternalMemoryFd);
     }
     for (auto& rb : readback_)
         rb = eng_.createBuffer(readbackBytes(), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -106,18 +111,26 @@ Compositor::Compositor(VkEngine& eng, const VideoFormatDesc& show, int mvW,
     composite_ = makePipe(shaders::composite_comp, shaders::composite_comp_size,
                           {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
                           sizeof(CompositePC));
     tile_ = makePipe(shaders::multiview_tile_comp, shaders::multiview_tile_comp_size,
                      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
                      sizeof(TilePC));
     pack_ = makePipe(shaders::pack_uyvy_comp, shaders::pack_uyvy_comp_size,
                      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                      sizeof(PackPC));
+    packNv_ = makePipe(shaders::pack_nv12_comp, shaders::pack_nv12_comp_size,
+                       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                       sizeof(PackPC));
     proxy_ = makePipe(shaders::proxy_down_comp, shaders::proxy_down_comp_size,
                       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                       VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
                       sizeof(ProxyPC));
 }
@@ -126,6 +139,7 @@ Compositor::~Compositor() {
     destroyPipe(composite_);
     destroyPipe(tile_);
     destroyPipe(pack_);
+    destroyPipe(packNv_);
     destroyPipe(proxy_);
     for (int f = 0; f < kFramesInFlight; ++f) {
         eng_.destroyImage(program_[f]);
@@ -133,6 +147,7 @@ Compositor::~Compositor() {
         eng_.destroyImage(programProxy_[f]);
         for (auto& p : inputProxy_[f]) eng_.destroyImage(p);
         eng_.destroyBuffer(packDev_[f]);
+        eng_.destroyBuffer(packNvDev_[f]);
     }
     for (auto& b : readback_) eng_.destroyBuffer(b);
     for (auto& b : packHost_) eng_.destroyBuffer(b);
@@ -244,22 +259,27 @@ void Compositor::proxyUsed(const VideoFormatDesc& d, int& w, int& h) {
     h = std::max(h, 2);
 }
 
-void Compositor::dispatchProxy(VkCommandBuffer cmd, VkImageView src, bool srcIsRgb,
+void Compositor::dispatchProxy(VkCommandBuffer cmd, VkImageView src,
+                               VkImageView srcUv, int mode,
                                const VideoFormatDesc* srcDesc, Image& dst,
                                int usedW, int usedH) {
     VkDescriptorImageInfo srcInfo{eng_.linearSampler(), src, VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo uvInfo{eng_.linearSampler(), srcUv ? srcUv : src,
+                                 VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorImageInfo dstInfo{VK_NULL_HANDLE, dst.view, VK_IMAGE_LAYOUT_GENERAL};
-    VkWriteDescriptorSet w[2] = {};
+    VkWriteDescriptorSet w[3] = {};
     w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &srcInfo, nullptr, nullptr};
     w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 1, 0, 1,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &uvInfo, nullptr, nullptr};
+    w[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 2, 0, 1,
             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &dstInfo, nullptr, nullptr};
     eng_.cmdPushDescriptorSet(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, proxy_.layout, 0,
-                              2, w);
+                              3, w);
     ProxyPC pc{};
     pc.dw = usedW;
     pc.dh = usedH;
-    pc.mode = srcIsRgb ? 1 : 0;
+    pc.mode = mode;
     if (srcDesc) {
         pc.sw = srcDesc->width;
         pc.sh = srcDesc->height;
@@ -270,21 +290,27 @@ void Compositor::dispatchProxy(VkCommandBuffer cmd, VkImageView src, bool srcIsR
     vkCmdDispatch(cmd, uint32_t((usedW + 15) / 16), uint32_t((usedH + 15) / 16), 1);
 }
 
-void Compositor::dispatchTile(VkCommandBuffer cmd, VkImageView src, int mode,
-                              const float srcMap[4], const VideoFormatDesc* srcDesc,
-                              int dstX, int dstY, int dstW, int dstH, int fif) {
+void Compositor::dispatchTile(VkCommandBuffer cmd, VkImageView src,
+                              VkImageView srcUv, int mode, const float srcMap[4],
+                              const VideoFormatDesc* srcDesc, int dstX, int dstY,
+                              int dstW, int dstH, int fif) {
     VkDescriptorImageInfo srcInfo{eng_.linearSampler(),
                                   src ? src : labelAtlas_.view,  // any valid view
                                   VK_IMAGE_LAYOUT_GENERAL};
     if (!srcInfo.imageView) srcInfo.imageView = multiview_[fif].view;
+    VkDescriptorImageInfo uvInfo{eng_.linearSampler(),
+                                 srcUv ? srcUv : srcInfo.imageView,
+                                 VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorImageInfo dstInfo{VK_NULL_HANDLE, multiview_[fif].view,
                                   VK_IMAGE_LAYOUT_GENERAL};
-    VkWriteDescriptorSet w[2] = {};
+    VkWriteDescriptorSet w[3] = {};
     w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &srcInfo, nullptr, nullptr};
     w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 1, 0, 1,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &uvInfo, nullptr, nullptr};
+    w[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 2, 0, 1,
             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &dstInfo, nullptr, nullptr};
-    eng_.cmdPushDescriptorSet(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, tile_.layout, 0, 2,
+    eng_.cmdPushDescriptorSet(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, tile_.layout, 0, 3,
                               w);
     TilePC pc{};
     pc.ox = dstX;
@@ -309,7 +335,8 @@ void Compositor::tileFromProxy(VkCommandBuffer cmd, const Image& proxy, int used
     float map[4];
     fitMap(usedW, usedH, dstW, dstH, map, float(usedW) / kProxyW,
            float(usedH) / kProxyH);
-    dispatchTile(cmd, proxy.view, 1, map, nullptr, dstX, dstY, dstW, dstH, fif);
+    dispatchTile(cmd, proxy.view, VK_NULL_HANDLE, 1, map, nullptr, dstX, dstY, dstW,
+                 dstH, fif);
 }
 
 void Compositor::labelTile(VkCommandBuffer cmd, int row, int dstX, int dstY,
@@ -318,19 +345,21 @@ void Compositor::labelTile(VkCommandBuffer cmd, int row, int dstX, int dstY,
     const int usedW = std::min(labelUsedW_[size_t(row)], dstW);
     const float aw = float(labelAtlas_.width), ah = float(labelAtlas_.height);
     float map[4] = {usedW / aw, kLabelRowH / ah, 0.f, row * kLabelRowH / ah};
-    dispatchTile(cmd, labelAtlas_.view, 1, map, nullptr, dstX, dstY, usedW,
-                 kLabelRowH, fif);
+    dispatchTile(cmd, labelAtlas_.view, VK_NULL_HANDLE, 1, map, nullptr, dstX, dstY,
+                 usedW, kLabelRowH, fif);
 }
 
 void Compositor::borderTiles(VkCommandBuffer cmd, int x, int y, int w, int h,
                              const float rgb[3], int fif) {
     const float map[4] = {rgb[0], rgb[1], rgb[2], 0.f};
-    dispatchTile(cmd, VK_NULL_HANDLE, 2, map, nullptr, x, y, w, kBorder, fif);
-    dispatchTile(cmd, VK_NULL_HANDLE, 2, map, nullptr, x, y + h - kBorder, w,
+    dispatchTile(cmd, VK_NULL_HANDLE, VK_NULL_HANDLE, 2, map, nullptr, x, y, w,
                  kBorder, fif);
-    dispatchTile(cmd, VK_NULL_HANDLE, 2, map, nullptr, x, y, kBorder, h, fif);
-    dispatchTile(cmd, VK_NULL_HANDLE, 2, map, nullptr, x + w - kBorder, y, kBorder,
+    dispatchTile(cmd, VK_NULL_HANDLE, VK_NULL_HANDLE, 2, map, nullptr, x,
+                 y + h - kBorder, w, kBorder, fif);
+    dispatchTile(cmd, VK_NULL_HANDLE, VK_NULL_HANDLE, 2, map, nullptr, x, y, kBorder,
                  h, fif);
+    dispatchTile(cmd, VK_NULL_HANDLE, VK_NULL_HANDLE, 2, map, nullptr,
+                 x + w - kBorder, y, kBorder, h, fif);
 }
 
 void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
@@ -350,23 +379,35 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
     for (int i = 0; i < numInputs_; ++i)
         initImageOnce(cmd, inputProxy_[fif][size_t(i)], proxyInit_[fif][size_t(i)]);
 
-    // -- composite: a/b UYVY -> program RGBA16F --
+    // -- composite: a/b (UYVY or NV12) -> program RGBA16F --
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, composite_.pipe);
-    VkDescriptorImageInfo aInfo{eng_.linearSampler(), job.a->ring->view(job.a->slot),
+    VkDescriptorImageInfo aInfo{eng_.linearSampler(), job.a->view(),
                                 VK_IMAGE_LAYOUT_GENERAL};
-    VkDescriptorImageInfo bInfo{eng_.linearSampler(), job.b->ring->view(job.b->slot),
+    VkDescriptorImageInfo aUvInfo{eng_.linearSampler(),
+                                  job.a->viewUV() ? job.a->viewUV() : job.a->view(),
+                                  VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo bInfo{eng_.linearSampler(), job.b->view(),
                                 VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo bUvInfo{eng_.linearSampler(),
+                                  job.b->viewUV() ? job.b->viewUV() : job.b->view(),
+                                  VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorImageInfo pInfo{VK_NULL_HANDLE, prog.view, VK_IMAGE_LAYOUT_GENERAL};
-    VkWriteDescriptorSet w[3] = {};
+    VkWriteDescriptorSet w[5] = {};
     w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &aInfo, nullptr, nullptr};
     w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 1, 0, 1,
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bInfo, nullptr, nullptr};
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &aUvInfo, nullptr, nullptr};
     w[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 2, 0, 1,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bInfo, nullptr, nullptr};
+    w[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 3, 0, 1,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bUvInfo, nullptr, nullptr};
+    w[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 4, 0, 1,
             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &pInfo, nullptr, nullptr};
     eng_.cmdPushDescriptorSet(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, composite_.layout,
-                              0, 3, w);
+                              0, 5, w);
     CompositePC cpc{};
+    cpc.aFmt = job.a->isNv12() ? 1 : 0;
+    cpc.bFmt = job.b->isNv12() ? 1 : 0;
     cpc.outW = show_.width;
     cpc.outH = show_.height;
     cpc.aW = job.a->desc.width;
@@ -415,12 +456,34 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
                       uint32_t((show_.height + 15) / 16), 1);
     }
 
+    // -- pack program to NV12 (SRT encoder) --
+    if (job.packNv12) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, packNv_.pipe);
+        VkDescriptorImageInfo srcInfo{eng_.linearSampler(), prog.view,
+                                      VK_IMAGE_LAYOUT_GENERAL};
+        VkDescriptorBufferInfo dstInfo{packNvDev_[fif].buf, 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet pw[2] = {};
+        pw[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0,
+                 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &srcInfo, nullptr,
+                 nullptr};
+        pw[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 1,
+                 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &dstInfo, nullptr};
+        eng_.cmdPushDescriptorSet(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                  packNv_.layout, 0, 2, pw);
+        PackPC npc{show_.width, show_.height, 0,
+                   show_.colorimetry == Colorimetry::BT601 ? 1 : 0};
+        vkCmdPushConstants(cmd, packNv_.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(npc), &npc);
+        vkCmdDispatch(cmd, uint32_t((show_.width / 4 + 15) / 16),
+                      uint32_t((show_.height / 2 + 15) / 16), 1);
+    }
+
     // -- proxies: program + inputs --
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, proxy_.pipe);
     int pgmProxW, pgmProxH;
     proxyUsed(show_, pgmProxW, pgmProxH);
-    dispatchProxy(cmd, prog.view, true, nullptr, programProxy_[fif], pgmProxW,
-                  pgmProxH);
+    dispatchProxy(cmd, prog.view, VK_NULL_HANDLE, /*mode=*/1, nullptr,
+                  programProxy_[fif], pgmProxW, pgmProxH);
     std::vector<std::pair<int, int>> proxDims(size_t(numInputs_), {2, 2});
     for (int i = 0; i < numInputs_; ++i) {
         const auto* f = job.mvInputs[size_t(i)].frame;
@@ -428,7 +491,7 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
         int pw, ph;
         proxyUsed(f->desc, pw, ph);
         proxDims[size_t(i)] = {pw, ph};
-        dispatchProxy(cmd, f->ring->view(f->slot), false, &f->desc,
+        dispatchProxy(cmd, f->view(), f->viewUV(), f->isNv12() ? 2 : 0, &f->desc,
                       inputProxy_[fif][size_t(i)], pw, ph);
     }
 
@@ -459,26 +522,42 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
     const int cells = std::max<int>(4, numInputs_);
     const int cellW = (mvW_ / cells) & ~1;
 
+    // Pass 1: content tiles. Overlays (labels/borders) rewrite pixels these
+    // dispatches produce, so each overlay pass needs a write->write barrier —
+    // without it, overlapping workgroups race and borders render "dashed".
     tileFromProxy(cmd, programProxy_[fif], pgmProxW, pgmProxH, 0, 0, halfW, topH,
                   fif);
-    labelTile(cmd, 0, 0, topH - kLabelRowH, halfW, fif);  // "PGM"
     if (job.previewInputIdx >= 0) {
         const auto& [pw, ph] = proxDims[size_t(job.previewInputIdx)];
         tileFromProxy(cmd, inputProxy_[fif][size_t(job.previewInputIdx)], pw, ph,
                       halfW, 0, mvW_ - halfW, topH, fif);
     }
-    labelTile(cmd, 1, halfW, topH - kLabelRowH, mvW_ - halfW, fif);  // "PVW"
-
     for (int i = 0; i < numInputs_; ++i) {
-        const int x = i * cellW;
         const auto& [pw, ph] = proxDims[size_t(i)];
-        tileFromProxy(cmd, inputProxy_[fif][size_t(i)], pw, ph, x, rowY, cellW, rowH,
-                      fif);
-        labelTile(cmd, 2 + i, x, rowY + rowH - kLabelRowH, cellW, fif);
+        tileFromProxy(cmd, inputProxy_[fif][size_t(i)], pw, ph, i * cellW, rowY,
+                      cellW, rowH, fif);
+    }
+
+    // Pass 2: labels.
+    memBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+               VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+               VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    labelTile(cmd, 0, 0, topH - kLabelRowH, halfW, fif);            // "PGM"
+    labelTile(cmd, 1, halfW, topH - kLabelRowH, mvW_ - halfW, fif); // "PVW"
+    for (int i = 0; i < numInputs_; ++i)
+        labelTile(cmd, 2 + i, i * cellW, rowY + rowH - kLabelRowH, cellW, fif);
+
+    // Pass 3: tally borders (win over labels at the 3px edges).
+    memBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+               VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+               VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    for (int i = 0; i < numInputs_; ++i) {
         if (i == job.tallyPgmA || i == job.tallyPgmB)
-            borderTiles(cmd, x, rowY, cellW, rowH, kTallyRed, fif);
+            borderTiles(cmd, i * cellW, rowY, cellW, rowH, kTallyRed, fif);
         else if (i == job.tallyPvw)
-            borderTiles(cmd, x, rowY, cellW, rowH, kTallyGreen, fif);
+            borderTiles(cmd, i * cellW, rowY, cellW, rowH, kTallyGreen, fif);
     }
 
     // tiles written -> copy out

@@ -7,29 +7,34 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(binding = 0) uniform sampler2D inA;  // UYVY packed, (w/2, h)
-layout(binding = 1) uniform sampler2D inB;
-layout(binding = 2, rgba16f) uniform writeonly image2D outImg;
+layout(binding = 0) uniform sampler2D inA;    // UYVY packed, or NV12 Y plane
+layout(binding = 1) uniform sampler2D inAuv;  // NV12 CbCr (else rebound to inA)
+layout(binding = 2) uniform sampler2D inB;
+layout(binding = 3) uniform sampler2D inBuv;
+layout(binding = 4, rgba16f) uniform writeonly image2D outImg;
 
 layout(push_constant) uniform PC {
     ivec2 outSize;
     ivec2 aFull;   // full-res luma dimensions
     ivec2 bFull;
-    ivec2 _pad;
+    int aFmt;      // 0 = UYVY, 1 = NV12
+    int bFmt;
     vec4 aMap;     // uvIn = uv * map.xy + map.zw (aspect-fit; outside = black)
     vec4 bMap;
     float alpha;   // 0 = A on air, 1 = B fully on air
     float softness;
     float ftb;
-    int transType; // 0 = mix (wipes: M2)
+    int transType; // 0 = mix
     int aCm;       // 0 = BT.709, 1 = BT.601
     int bCm;
 } pc;
 
-vec3 fetchInput(sampler2D t, ivec2 full, vec4 map, int cm, vec2 uv) {
+vec3 fetchInput(sampler2D t, sampler2D tuv, int fmt, ivec2 full, vec4 map,
+                int cm, vec2 uv) {
     vec2 uvi = uv * map.xy + map.zw;
     if (any(lessThan(uvi, vec2(0.0))) || any(greaterThan(uvi, vec2(1.0))))
         return vec3(0.0);
+    if (fmt == 1) return nv12_sample(t, tuv, uvi, cm);
     return uyvy_sample_bilinear(t, full, uvi, cm);
 }
 
@@ -66,10 +71,10 @@ void main() {
     if (any(greaterThanEqual(px, pc.outSize))) return;
     vec2 uv = (vec2(px) + 0.5) / vec2(pc.outSize);
 
-    vec3 c = fetchInput(inA, pc.aFull, pc.aMap, pc.aCm, uv);
+    vec3 c = fetchInput(inA, inAuv, pc.aFmt, pc.aFull, pc.aMap, pc.aCm, uv);
     float m = (pc.transType == 0) ? pc.alpha : ((pc.alpha > 0.0) ? mixFactor(uv) : 0.0);
     if (m > 0.0) {
-        vec3 b = fetchInput(inB, pc.bFull, pc.bMap, pc.bCm, uv);
+        vec3 b = fetchInput(inB, inBuv, pc.bFmt, pc.bFull, pc.bMap, pc.bCm, uv);
         c = mix(c, b, m);
     }
     c *= (1.0 - pc.ftb);

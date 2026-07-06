@@ -40,6 +40,7 @@ public:
         int previewInputIdx = -1;         // input index on PVW bus (-1 = none)
         int tallyPgmA = -1, tallyPgmB = -1, tallyPvw = -1;
         bool packProgram = false;         // record UYVY pack (NDI out enabled)
+        bool packNv12 = false;            // record NV12 pack (SRT out enabled)
     };
 
     void record(VkCommandBuffer cmd, const TickJob& job, int fif, int rbSlot);
@@ -61,6 +62,10 @@ public:
     size_t packBytes() const { return show_.frameBytes(); }
     std::atomic<uint64_t>& packStamp(int slot) { return packStamp_[slot]; }
     std::atomic<bool>& packPinned(int slot) { return packPinned_[slot]; }
+
+    // NV12 pack buffers for the SRT encoder (exportable; importer owns fds).
+    int nvPackExportFd(int fif) { return eng_.exportMemoryFd(packNvDev_[fif]); }
+    size_t nvPackBytes() const { return size_t(show_.width) * show_.height * 3 / 2; }
 
     // Label atlas: rows 0=PGM, 1=PVW, 2+i=input i; usedWidths in pixels.
     void setLabelAtlas(Image atlas, std::vector<int> usedWidths);
@@ -91,12 +96,13 @@ private:
                     VkAccessFlags2 dstAccess);
     void initImageOnce(VkCommandBuffer cmd, Image& img, uint8_t& flag);
 
-    void dispatchProxy(VkCommandBuffer cmd, VkImageView src, bool srcIsRgb,
-                       const VideoFormatDesc* srcDesc, Image& dst, int usedW,
-                       int usedH);
-    void dispatchTile(VkCommandBuffer cmd, VkImageView src, int mode,
-                      const float srcMap[4], const VideoFormatDesc* srcDesc,
-                      int dstX, int dstY, int dstW, int dstH, int fif);
+    void dispatchProxy(VkCommandBuffer cmd, VkImageView src, VkImageView srcUv,
+                       int mode, const VideoFormatDesc* srcDesc, Image& dst,
+                       int usedW, int usedH);
+    void dispatchTile(VkCommandBuffer cmd, VkImageView src, VkImageView srcUv,
+                      int mode, const float srcMap[4],
+                      const VideoFormatDesc* srcDesc, int dstX, int dstY,
+                      int dstW, int dstH, int fif);
     void tileFromProxy(VkCommandBuffer cmd, const Image& proxy, int usedW,
                        int usedH, int dstX, int dstY, int dstW, int dstH, int fif);
     void labelTile(VkCommandBuffer cmd, int row, int dstX, int dstY, int dstW,
@@ -120,6 +126,7 @@ private:
 
     Buffer readback_[kReadbackSlots];
     Buffer packDev_[kFramesInFlight];
+    Buffer packNvDev_[kFramesInFlight];  // exportable, CUDA-imported by SRT out
     Buffer packHost_[kPackSlots];
     std::atomic<uint64_t> packStamp_[kPackSlots]{};
     std::atomic<bool> packPinned_[kPackSlots]{};
@@ -127,7 +134,7 @@ private:
     Image labelAtlas_{};
     std::vector<int> labelUsedW_;
 
-    Pipe composite_, tile_, pack_, proxy_;
+    Pipe composite_, tile_, pack_, packNv_, proxy_;
 };
 
 }  // namespace moo::gpu

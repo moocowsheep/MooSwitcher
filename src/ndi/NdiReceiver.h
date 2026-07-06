@@ -5,6 +5,7 @@
 #include <thread>
 
 #include "core/Spsc.h"
+#include "engine/IInputSource.h"
 #include "gpu/UploadRing.h"
 #include "ndi/NdiFinder.h"
 #include "ndi/NdiLib.h"
@@ -16,31 +17,22 @@ namespace moo {
 // latest-frame mailbox publish. Handles source (re)connect by name substring
 // and mid-show format changes (new UploadRing; the old one dies with its
 // last published frame).
-class NdiReceiver {
+class NdiReceiver : public IInputSource {
 public:
-    using FramePtr = std::shared_ptr<const gpu::GpuFrame>;
-    using Mailbox = LatestMailbox<FramePtr>;
-
     NdiReceiver(gpu::VkEngine& eng, gpu::Queue& uploadQueue, NdiFinder& finder,
                 std::string matchName, int index);
-    ~NdiReceiver();
+    ~NdiReceiver() override;
 
-    std::optional<Mailbox::Item> newer(uint64_t lastSeq) const {
+    std::optional<Mailbox::Item> newer(uint64_t lastSeq) const override {
         return mailbox_.takeNewer(lastSeq);
     }
 
-    struct Status {
-        bool connected = false;
-        int64_t frames = 0;
-        int64_t drops = 0;
-        VideoFormatDesc desc{};
-    };
-    Status status() const;
+    Status status() const override;
     const std::string& matchName() const { return match_; }
 
     // Tally toward the source; applied on the capture thread (and re-applied
     // after reconnects).
-    void setTally(bool onProgram, bool onPreview) {
+    void setTally(bool onProgram, bool onPreview) override {
         tally_.store(uint8_t(onProgram | (onPreview << 1)),
                      std::memory_order_relaxed);
     }

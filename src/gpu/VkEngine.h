@@ -83,8 +83,13 @@ public:
     Buffer createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                         VkMemoryPropertyFlags required,
                         VkMemoryPropertyFlags preferred = 0,
-                        VkMemoryPropertyFlags avoid = 0);
+                        VkMemoryPropertyFlags avoid = 0,
+                        bool exportable = false);
     void destroyBuffer(Buffer& b);
+
+    // New OPAQUE_FD for the buffer's memory (caller/importer owns the fd).
+    // Requires exportable=true at creation and hasExternalMemoryFd.
+    int exportMemoryFd(const Buffer& b);
 
     Image createImage2D(uint32_t w, uint32_t h, VkFormat format,
                         VkImageUsageFlags usage);
@@ -109,11 +114,13 @@ public:
                                                 VkPipelineStageFlags2 stages);
 
     PFN_vkCmdPushDescriptorSetKHR cmdPushDescriptorSet = nullptr;
+    PFN_vkGetMemoryFdKHR getMemoryFd = nullptr;
     bool hasExternalMemoryFd = false;
     bool hasExternalSemaphoreFd = false;
 
     // Queue families that images are shared across (CONCURRENT mode).
     std::vector<uint32_t> sharedFamilies() const;
+    const uint8_t* deviceUuid() const { return deviceUuid_; }
 
 private:
     VkInstance inst_ = VK_NULL_HANDLE;
@@ -121,6 +128,7 @@ private:
     VkDevice dev_ = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memProps_{};
     VkSampler sampler_ = VK_NULL_HANDLE;
+    uint8_t deviceUuid_[16] = {};
 
     Queue gfx_, xferUp_, xferDown_;
     std::mutex gfxMtx_, upMtx_, downMtx_;

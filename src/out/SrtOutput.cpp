@@ -1,0 +1,160 @@
+#include "out/SrtOutput.h"
+
+#include <mutex>
+
+#include "core/Log.h"
+#include "core/MediaClock.h"
+#include "core/Stats.h"
+
+namespace moo {
+
+SrtOutput::SrtOutput(gpu::VkEngine& vk, media::CudaCtx& cuda,
+                     gpu::Compositor& comp, gpu::Timeline& renderTL,
+                     SrtOutConfig cfg, const VideoFormatDesc& show)
+    : vk_(vk), cuda_(cuda), comp_(comp), renderTL_(renderTL),
+      cfg_(std::move(cfg)), show_(show) {
+    static std::once_flag netInit;
+    std::call_once(netInit, [] { avformat_network_init(); });
+
+    if (!enc_.open(cuda_, show_, cfg_.bitrateKbps)) return;
+
+    for (int f = 0; f < gpu::Compositor::kFramesInFlight; ++f) {
+        const int fd = comp_.nvPackExportFd(f);
+        if (fd < 0 || !cuda_.importVkFd(fd, comp_.nvPackBytes(), imports_[f])) {
+            MOO_LOGE("srt out: NV12 pack buffer import failed (fif %d)", f);
+            return;
+        }
+    }
+
+    ok_ = true;
+    encodeThread_ = std::jthread([this](std::stop_token st) { encodeLoop(st); });
+    muxThread_ = std::jthread([this](std::stop_token st) { muxLoop(st); });
+    MOO_LOGI("srt out: '%s' ready", cfg_.url.c_str());
+}
+
+SrtOutput::~SrtOutput() {
+    stopFlag_.store(true);  // unblocks avio_open2/writes via interrupt callback
+    encodeThread_ = {};
+    muxThread_ = {};
+    AVPacket* p = nullptr;
+    while (pkts_.pop(p)) av_packet_free(&p);
+    for (auto& im : imports_) cuda_.release(im);
+}
+
+int SrtOutput::interruptCb(void* opaque) {
+    return static_cast<SrtOutput*>(opaque)->stopFlag_.load(std::memory_order_relaxed);
+}
+
+void SrtOutput::encodeLoop(std::stop_token st) {
+    auto& encCtr = Stats::counter("out.srt.encoded");
+    auto& lateCtr = Stats::counter("out.srt.renderWaitTimeouts");
+    auto& dropCtr = Stats::counter("out.srt.packetRingDrops");
+
+    cuda_.makeCurrent();
+    std::vector<AVPacket*> pkts;
+
+    while (!st.stop_requested()) {
+        PackEvent e;
+        if (!evts_.pop(e)) {
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+            continue;
+        }
+        while (!renderTL_.waitCompleted(e.value, 100'000'000)) {
+            lateCtr.add();
+            if (st.stop_requested()) return;
+        }
+        pkts.clear();
+        if (enc_.encode(imports_[e.fif].ptr, e.tick, pkts)) {
+            copied_[e.fif].store(e.value, std::memory_order_release);
+            encoded_.fetch_add(1, std::memory_order_relaxed);
+            encCtr.add();
+            for (auto* p : pkts) {
+                if (!pkts_.push(p)) {
+                    av_packet_free(&p);
+                    dropped_.fetch_add(1, std::memory_order_relaxed);
+                    dropCtr.add();
+                }
+            }
+        } else {
+            copied_[e.fif].store(e.value, std::memory_order_release);  // never wedge render
+        }
+    }
+    pkts.clear();
+    enc_.drain(pkts);
+    for (auto* p : pkts) {
+        if (!pkts_.push(p)) av_packet_free(&p);
+    }
+}
+
+bool SrtOutput::openMux() {
+    if (avformat_alloc_output_context2(&oc_, nullptr, "mpegts",
+                                       cfg_.url.c_str()) < 0)
+        return false;
+    oc_->interrupt_callback = {&SrtOutput::interruptCb, this};
+
+    AVStream* st = avformat_new_stream(oc_, nullptr);
+    if (!st) return false;
+    avcodec_parameters_from_context(st->codecpar, enc_.codecCtx());
+    st->time_base = {1, 90000};
+
+    if (avio_open2(&oc_->pb, cfg_.url.c_str(), AVIO_FLAG_WRITE,
+                   &oc_->interrupt_callback, nullptr) < 0)
+        return false;
+    if (avformat_write_header(oc_, nullptr) < 0) return false;
+    connected_.store(true, std::memory_order_relaxed);
+    MOO_LOGI("srt out: connected (%s)", cfg_.url.c_str());
+    return true;
+}
+
+void SrtOutput::closeMux(bool writeTrailer) {
+    if (!oc_) return;
+    if (writeTrailer && oc_->pb) av_write_trailer(oc_);
+    if (oc_->pb) avio_closep(&oc_->pb);
+    avformat_free_context(oc_);
+    oc_ = nullptr;
+    connected_.store(false, std::memory_order_relaxed);
+}
+
+void SrtOutput::muxLoop(std::stop_token st) {
+    auto& sentCtr = Stats::counter("out.srt.packets");
+    auto& reconnCtr = Stats::counter("out.srt.reconnects");
+    const AVRational encTb = enc_.timeBase();
+    int64_t nextRetryNs = 0;
+
+    while (!st.stop_requested()) {
+        AVPacket* pkt = nullptr;
+        if (!pkts_.pop(pkt)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        if (!oc_) {
+            const int64_t now = MediaClock::nowNs();
+            if (now >= nextRetryNs) {
+                if (!openMux()) {
+                    closeMux(false);
+                    nextRetryNs = now + 1'000'000'000;  // 1s backoff
+                    if (!st.stop_requested()) reconnCtr.add();
+                }
+            }
+        }
+        if (!oc_) {
+            av_packet_free(&pkt);  // disconnected: drop, never backpressure
+            continue;
+        }
+        pkt->stream_index = 0;
+        av_packet_rescale_ts(pkt, encTb, oc_->streams[0]->time_base);
+        const int r = av_interleaved_write_frame(oc_, pkt);
+        av_packet_free(&pkt);
+        if (r < 0) {
+            MOO_LOGW("srt out: write failed (%d); reconnecting", r);
+            closeMux(false);
+            nextRetryNs = MediaClock::nowNs() + 1'000'000'000;
+        } else {
+            sent_.fetch_add(1, std::memory_order_relaxed);
+            sentCtr.add();
+        }
+    }
+    closeMux(true);
+}
+
+}  // namespace moo

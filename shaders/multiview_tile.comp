@@ -7,7 +7,8 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(binding = 0) uniform sampler2D srcTex;
-layout(binding = 1, rgba8) uniform writeonly image2D dstImg;
+layout(binding = 1) uniform sampler2D srcUv;  // NV12 CbCr (else rebound src)
+layout(binding = 2, rgba8) uniform writeonly image2D dstImg;
 
 layout(push_constant) uniform PC {
     ivec2 dstOrigin;
@@ -15,7 +16,7 @@ layout(push_constant) uniform PC {
     ivec2 srcFull;   // full-res luma size (UYVY mode)
     ivec2 _pad;
     vec4 srcMap;     // uvIn = uv * map.xy + map.zw  |  mode 2: rgb color in xyz
-    int mode;        // 0 = UYVY packed, 1 = RGB texture, 2 = solid color
+    int mode;        // 0 = UYVY packed, 1 = RGB, 2 = solid color, 3 = NV12
     int cm;
 } pc;
 
@@ -35,6 +36,8 @@ void main() {
     if (!(any(lessThan(uvi, vec2(0.0))) || any(greaterThan(uvi, vec2(1.0))))) {
         if (pc.mode == 0)
             c = uyvy_sample_bilinear(srcTex, pc.srcFull, uvi, pc.cm);
+        else if (pc.mode == 3)
+            c = nv12_sample(srcTex, srcUv, uvi, pc.cm);
         else
             c = texture(srcTex, uvi).rgb;
     }

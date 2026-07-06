@@ -3,6 +3,8 @@
 // macropixel (bytes U, Y0, V, Y1 little-endian). BT.709/601 limited range,
 // chroma co-sited at the even pixel with a [1 2 1]/4 horizontal filter.
 
+#include "ycbcr.glsl"
+
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(binding = 0) uniform sampler2D srcRgb;
@@ -14,23 +16,9 @@ layout(push_constant) uniform PC {
     int cm;          // 0 = BT.709, 1 = BT.601
 } pc;
 
-vec3 rgbToYcbcr(vec3 rgb, int cm) {
-    float y, cb, cr;
-    if (cm == 1) {  // BT.601
-        y = dot(rgb, vec3(0.299, 0.587, 0.114));
-        cb = (rgb.b - y) / 1.772;
-        cr = (rgb.r - y) / 1.402;
-    } else {        // BT.709
-        y = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
-        cb = (rgb.b - y) / 1.8556;
-        cr = (rgb.r - y) / 1.5748;
-    }
-    return vec3(y, cb, cr);
-}
-
 vec3 fetchYcc(ivec2 xy) {
     xy = clamp(xy, ivec2(0), pc.size - 1);
-    return rgbToYcbcr(clamp(texelFetch(srcRgb, xy, 0).rgb, 0.0, 1.0), pc.cm);
+    return rgb_to_ycbcr(clamp(texelFetch(srcRgb, xy, 0).rgb, 0.0, 1.0), pc.cm);
 }
 
 uint toByteY(float y) { return uint(clamp(16.0 + 219.0 * y + 0.5, 1.0, 254.0)); }

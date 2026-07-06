@@ -13,7 +13,11 @@ int main(int argc, char** argv) {
     const QStringList args = app.arguments();
     for (int i = 1; i < args.size(); ++i) {
         if (args[i] == QStringLiteral("--input") && i + 1 < args.size())
-            cfg.inputs.push_back(args[++i].toStdString());
+            cfg.inputs.push_back(
+                {moo::InputSpec::Type::Ndi, args[++i].toStdString()});
+        else if (args[i] == QStringLiteral("--srt-input") && i + 1 < args.size())
+            cfg.inputs.push_back(
+                {moo::InputSpec::Type::Srt, args[++i].toStdString()});
         else if (args[i] == QStringLiteral("--validate"))
             cfg.validation = true;
         else if (args[i] == QStringLiteral("--show") && i + 1 < args.size()) {
@@ -22,9 +26,14 @@ int main(int argc, char** argv) {
                 cfg.show.width = parts[0].toInt();
                 cfg.show.height = parts[1].toInt();
             }
-        }
+        } else if (args[i] == QStringLiteral("--srt-out") && i + 1 < args.size())
+            cfg.srtUrl = args[++i].toStdString();
+        else if (args[i] == QStringLiteral("--srt-bitrate") && i + 1 < args.size())
+            cfg.srtBitrateKbps = args[++i].toInt();
     }
-    if (cfg.inputs.empty()) cfg.inputs = {"MooBenchA", "MooBenchB"};
+    if (cfg.inputs.empty())
+        cfg.inputs = {{moo::InputSpec::Type::Ndi, "MooBenchA"},
+                      {moo::InputSpec::Type::Ndi, "MooBenchB"}};
 
     moo::Engine engine;
     if (!engine.start(cfg)) {
@@ -33,7 +42,7 @@ int main(int argc, char** argv) {
     }
 
     QStringList names;
-    for (const auto& n : cfg.inputs) names << QString::fromStdString(n);
+    for (const auto& n : cfg.inputs) names << QString::fromStdString(n.ref);
 
     moo::ui::EngineBridge bridge(engine);
     moo::ui::MainWindow win(bridge, names);

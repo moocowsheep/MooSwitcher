@@ -44,18 +44,40 @@ endfunction()
 moo_shader(composite_comp composite.comp)
 moo_shader(multiview_tile_comp multiview_tile.comp)
 moo_shader(pack_uyvy_comp pack_uyvy.comp)
+moo_shader(pack_nv12_comp pack_nv12.comp)
 moo_shader(proxy_down_comp proxy_down.comp)
 add_custom_target(moo_shaders DEPENDS ${MOO_SHADER_HDRS})
 
 add_library(moo_gpu STATIC
   src/gpu/VkEngine.cpp
   src/gpu/UploadRing.cpp
+  src/gpu/Nv12Ring.cpp
   src/gpu/Compositor.cpp
 )
 target_link_libraries(moo_gpu PUBLIC moo_core Vulkan::Vulkan)
 target_include_directories(moo_gpu PUBLIC ${CMAKE_BINARY_DIR})
 target_compile_options(moo_gpu PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 add_dependencies(moo_gpu moo_shaders)
+
+# -- CUDA driver API (libcuda from the driver; headers from the toolkit) --
+find_library(CUDA_DRIVER_LIB cuda HINTS /usr/lib /usr/lib64)
+find_path(CUDA_DRIVER_INC cuda.h HINTS /opt/cuda/include /usr/local/cuda/include)
+if(NOT CUDA_DRIVER_LIB OR NOT CUDA_DRIVER_INC)
+  message(FATAL_ERROR "CUDA driver API not found (libcuda.so + cuda.h)")
+endif()
+add_library(CudaDriver INTERFACE)
+target_link_libraries(CudaDriver INTERFACE ${CUDA_DRIVER_LIB})
+target_include_directories(CudaDriver SYSTEM INTERFACE ${CUDA_DRIVER_INC})
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavformat libavutil)
+
+add_library(moo_media STATIC
+  src/media/CudaCtx.cpp
+  src/media/FfmpegNvenc.cpp
+)
+target_link_libraries(moo_media PUBLIC moo_gpu CudaDriver PkgConfig::FFMPEG)
+target_compile_options(moo_media PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 
 if(NDI_FOUND)
   add_library(moo_ndi STATIC src/ndi/NdiLib.cpp)
@@ -77,11 +99,13 @@ if(NDI_FOUND)
 
   add_library(moo_engine STATIC
     src/engine/Engine.cpp
+    src/in/SrtInput.cpp
     src/ndi/NdiFinder.cpp
     src/ndi/NdiReceiver.cpp
     src/out/NdiOutput.cpp
+    src/out/SrtOutput.cpp
   )
-  target_link_libraries(moo_engine PUBLIC moo_gpu moo_ndi)
+  target_link_libraries(moo_engine PUBLIC moo_gpu moo_ndi moo_media)
   target_compile_options(moo_engine PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 
   add_executable(moo-headless tools/moo-headless/main.cpp)
@@ -131,8 +155,9 @@ if(MOO_BUILD_TESTS)
     tests/switcher_core_test.cpp
     tests/strip_test.cpp
     tests/gpu_composite_test.cpp
+    tests/interop_test.cpp
   )
-  target_link_libraries(moo_tests PRIVATE moo_core moo_gpu Catch2::Catch2WithMain)
+  target_link_libraries(moo_tests PRIVATE moo_core moo_gpu moo_media Catch2::Catch2WithMain)
   target_include_directories(moo_tests PRIVATE tools)
 
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)

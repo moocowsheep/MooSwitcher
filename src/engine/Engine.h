@@ -11,6 +11,7 @@
 #include "core/MediaClock.h"
 #include "core/Spsc.h"
 #include "engine/Commands.h"
+#include "engine/IInputSource.h"
 #include "engine/SwitcherCore.h"
 #include "gpu/Compositor.h"
 #include "gpu/UploadRing.h"
@@ -18,18 +19,28 @@
 #include "ndi/NdiFinder.h"
 #include "ndi/NdiReceiver.h"
 
+#include "media/CudaCtx.h"
+
 namespace moo {
 
 class NdiOutput;
+class SrtOutput;
+
+struct InputSpec {
+    enum class Type { Ndi, Srt } type = Type::Ndi;
+    std::string ref;  // NDI name substring, or srt:// URL
+};
 
 struct EngineConfig {
     VideoFormatDesc show{1920, 1080, 60000, 1001};
     int mvW = 1280;
     int mvH = 720;
-    std::vector<std::string> inputs;  // NDI source name substrings
+    std::vector<InputSpec> inputs;
     bool validation = false;
     bool ndiOut = true;
     std::string ndiOutName = "MooSwitcher PGM";
+    std::string srtUrl;      // empty = SRT output off
+    int srtBitrateKbps = 0;  // 0 = auto
 };
 
 // Owns the GPU, the NDI inputs and program output, the switcher state
@@ -46,6 +57,8 @@ public:
 
     bool copyMultiview(std::vector<uint8_t>& out, uint64_t& lastSeq, int& w, int& h);
 
+    using InputStatus = IInputSource::Status;
+
     struct UiState {
         int program = 0, preview = 1;
         bool inTransition = false;
@@ -58,10 +71,12 @@ public:
     }
 
     int inputCount() const { return int(inputs_.size()); }
-    NdiReceiver::Status inputStatus(int i) const { return inputs_[i]->status(); }
+    InputStatus inputStatus(int i) const { return inputs_[i]->status(); }
     int64_t renderedTicks() const { return ticks_.load(std::memory_order_relaxed); }
     int64_t skippedTicks() const { return skips_.load(std::memory_order_relaxed); }
     int64_t ndiOutFrames() const;
+    int64_t srtFramesEncoded() const;
+    bool srtConnected() const;
 
 private:
     void renderLoop(std::stop_token st);
@@ -72,8 +87,11 @@ private:
     gpu::VkEngine vk_;
     std::unique_ptr<gpu::Compositor> comp_;
     std::unique_ptr<NdiFinder> finder_;
-    std::vector<std::unique_ptr<NdiReceiver>> inputs_;
+    std::vector<std::unique_ptr<IInputSource>> inputs_;
     std::unique_ptr<NdiOutput> ndiOut_;
+    media::CudaCtx cuda_;
+    std::unique_ptr<SrtOutput> srtOut_;
+    std::array<uint64_t, gpu::Compositor::kFramesInFlight> nvPushed_{};
 
     std::shared_ptr<gpu::UploadRing> placeholderRing_;
     std::shared_ptr<const gpu::GpuFrame> placeholder_;

@@ -30,7 +30,11 @@ int main(int argc, char** argv) {
         const std::string a = argv[i];
         auto next = [&]() -> const char* { return i + 1 < argc ? argv[++i] : nullptr; };
         if (a == "--input") {
-            if (const char* v = next()) cfg.inputs.push_back(v);
+            if (const char* v = next())
+                cfg.inputs.push_back({moo::InputSpec::Type::Ndi, v});
+        } else if (a == "--srt-input") {
+            if (const char* v = next())
+                cfg.inputs.push_back({moo::InputSpec::Type::Srt, v});
         } else if (a == "--show") {
             const char* v = next();
             if (!v || sscanf(v, "%dx%d", &cfg.show.width, &cfg.show.height) != 2)
@@ -49,6 +53,11 @@ int main(int argc, char** argv) {
             scriptedAutos = true;  // auto-transition every 2.5s, cycling types
         } else if (a == "--no-ndi-out") {
             cfg.ndiOut = false;
+        } else if (a == "--srt-out") {
+            if (const char* v = next()) cfg.srtUrl = v;
+        } else if (a == "--srt-bitrate") {
+            const char* v = next();
+            if (v) cfg.srtBitrateKbps = atoi(v);
         } else if (a == "--validate") {
             cfg.validation = true;
         } else {
@@ -59,7 +68,9 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    if (cfg.inputs.empty()) cfg.inputs = {"MooBenchA", "MooBenchB"};
+    if (cfg.inputs.empty())
+        cfg.inputs = {{moo::InputSpec::Type::Ndi, "MooBenchA"},
+                      {moo::InputSpec::Type::Ndi, "MooBenchB"}};
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
 
@@ -109,6 +120,9 @@ int main(int argc, char** argv) {
         if (now >= nextLogNs) {
             std::string line = "ticks=" + std::to_string(engine.renderedTicks()) +
                                " skips=" + std::to_string(engine.skippedTicks());
+            if (engine.srtFramesEncoded() || engine.srtConnected())
+                line += "  srt[" + std::string(engine.srtConnected() ? "up" : "down") +
+                        " enc=" + std::to_string(engine.srtFramesEncoded()) + "]";
             for (int i = 0; i < engine.inputCount(); ++i) {
                 const auto s = engine.inputStatus(i);
                 line += "  in" + std::to_string(i) + "[" +

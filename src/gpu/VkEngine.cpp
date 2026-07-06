@@ -76,6 +76,12 @@ bool VkEngine::init(bool enableValidation) {
              VK_API_VERSION_PATCH(props.apiVersion));
     vkGetPhysicalDeviceMemoryProperties(phys_, &memProps_);
 
+    VkPhysicalDeviceIDProperties idProps{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+    VkPhysicalDeviceProperties2 props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    props2.pNext = &idProps;
+    vkGetPhysicalDeviceProperties2(phys_, &props2);
+    memcpy(deviceUuid_, idProps.deviceUUID, 16);
+
     // -- queue families: graphics+compute, plus a dedicated transfer family --
     uint32_t famCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(phys_, &famCount, nullptr);
@@ -173,6 +179,9 @@ bool VkEngine::init(bool enableValidation) {
 
     cmdPushDescriptorSet = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
         vkGetDeviceProcAddr(dev_, "vkCmdPushDescriptorSetKHR"));
+    if (hasExternalMemoryFd)
+        getMemoryFd = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
+            vkGetDeviceProcAddr(dev_, "vkGetMemoryFdKHR"));
 
     VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
@@ -218,10 +227,14 @@ uint32_t VkEngine::memoryType(uint32_t typeBits, VkMemoryPropertyFlags required,
 Buffer VkEngine::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                               VkMemoryPropertyFlags required,
                               VkMemoryPropertyFlags preferred,
-                              VkMemoryPropertyFlags avoid) {
+                              VkMemoryPropertyFlags avoid, bool exportable) {
     Buffer b;
     b.size = size;
+    VkExternalMemoryBufferCreateInfo ext{
+        VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+    ext.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
     VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    if (exportable) bci.pNext = &ext;
     bci.size = size;
     bci.usage = usage;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -234,7 +247,10 @@ Buffer VkEngine::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
         vkDestroyBuffer(dev_, b.buf, nullptr);
         return {};
     }
+    VkExportMemoryAllocateInfo exp{VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO};
+    exp.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
     VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    if (exportable) mai.pNext = &exp;
     mai.allocationSize = req.size;
     mai.memoryTypeIndex = type;
     if (vkAllocateMemory(dev_, &mai, nullptr, &b.mem) != VK_SUCCESS) {
@@ -245,6 +261,16 @@ Buffer VkEngine::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     if (required & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
         vkMapMemory(dev_, b.mem, 0, VK_WHOLE_SIZE, 0, &b.mapped);
     return b;
+}
+
+int VkEngine::exportMemoryFd(const Buffer& b) {
+    if (!getMemoryFd) return -1;
+    VkMemoryGetFdInfoKHR gi{VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR};
+    gi.memory = b.mem;
+    gi.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+    int fd = -1;
+    if (getMemoryFd(dev_, &gi, &fd) != VK_SUCCESS) return -1;
+    return fd;
 }
 
 void VkEngine::destroyBuffer(Buffer& b) {

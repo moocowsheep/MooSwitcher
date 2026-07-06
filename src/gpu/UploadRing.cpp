@@ -1,8 +1,36 @@
 #include "gpu/UploadRing.h"
 
 #include "core/Log.h"
+#include "gpu/Nv12Ring.h"
 
 namespace moo::gpu {
+
+GpuFrame::GpuFrame(std::shared_ptr<UploadRing> r, int s, uint64_t v)
+    : desc(r->desc()), slot(s), uploadValue(v), uyvy(std::move(r)) {
+    uyvy->addRenderRef(slot);
+}
+
+GpuFrame::GpuFrame(std::shared_ptr<Nv12Ring> r, int s, uint64_t v)
+    : desc(r->desc()), slot(s), uploadValue(v), nv12(std::move(r)) {
+    nv12->addRenderRef(slot);
+}
+
+GpuFrame::~GpuFrame() {
+    if (uyvy) uyvy->releaseRenderRef(slot);
+    if (nv12) nv12->releaseRenderRef(slot);
+}
+
+VkImageView GpuFrame::view() const {
+    return nv12 ? nv12->viewY(slot) : uyvy->view(slot);
+}
+
+VkImageView GpuFrame::viewUV() const {
+    return nv12 ? nv12->viewUV(slot) : VK_NULL_HANDLE;
+}
+
+const Timeline& GpuFrame::timeline() const {
+    return nv12 ? nv12->timeline() : uyvy->timeline();
+}
 
 UploadRing::UploadRing(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQueue)
     : eng_(eng), desc_(desc), queue_(xferQueue) {

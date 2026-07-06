@@ -64,22 +64,27 @@ private:
     int cursor_ = 0;
 };
 
-// A published frame: pins one ring slot for render use.
+class Nv12Ring;
+
+// A published frame: pins one ring slot (UYVY or NV12) for render use.
 struct GpuFrame {
-    std::shared_ptr<UploadRing> ring;
+    VideoFormatDesc desc;
     int slot = -1;
     uint64_t uploadValue = 0;
-    VideoFormatDesc desc;
+    std::shared_ptr<UploadRing> uyvy;  // exactly one of these is set
+    std::shared_ptr<Nv12Ring> nv12;
 
-    GpuFrame(std::shared_ptr<UploadRing> r, int s, uint64_t v)
-        : ring(std::move(r)), slot(s), uploadValue(v), desc(ring->desc()) {
-        ring->addRenderRef(slot);
-    }
-    ~GpuFrame() { ring->releaseRenderRef(slot); }
+    GpuFrame(std::shared_ptr<UploadRing> r, int s, uint64_t v);
+    GpuFrame(std::shared_ptr<Nv12Ring> r, int s, uint64_t v);
+    ~GpuFrame();
     GpuFrame(const GpuFrame&) = delete;
     GpuFrame& operator=(const GpuFrame&) = delete;
 
-    bool uploaded() const { return ring->timeline().completed() >= uploadValue; }
+    bool isNv12() const { return nv12 != nullptr; }
+    VkImageView view() const;    // packed UYVY, or the NV12 Y plane
+    VkImageView viewUV() const;  // NV12 CbCr plane; VK_NULL_HANDLE otherwise
+    const Timeline& timeline() const;
+    bool uploaded() const { return timeline().completed() >= uploadValue; }
 };
 
 }  // namespace moo::gpu

@@ -1,12 +1,15 @@
 #include "engine/Engine.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "core/Font5x7.h"
+#include "in/SrtInput.h"
 #include "core/Log.h"
 #include "core/Stats.h"
 #include "ndi/NdiLib.h"
 #include "out/NdiOutput.h"
+#include "out/SrtOutput.h"
 
 namespace moo {
 
@@ -14,6 +17,10 @@ Engine::Engine() = default;
 Engine::~Engine() { stop(); }
 
 int64_t Engine::ndiOutFrames() const { return ndiOut_ ? ndiOut_->framesSent() : 0; }
+int64_t Engine::srtFramesEncoded() const {
+    return srtOut_ ? srtOut_->framesEncoded() : 0;
+}
+bool Engine::srtConnected() const { return srtOut_ && srtOut_->connected(); }
 
 bool Engine::start(const EngineConfig& cfg) {
     cfg_ = cfg;
@@ -38,17 +45,44 @@ bool Engine::start(const EngineConfig& cfg) {
     if (!createPlaceholder()) return false;
     if (!buildLabelAtlas()) return false;
 
+    const bool needCuda =
+        !cfg_.srtUrl.empty() ||
+        std::any_of(cfg_.inputs.begin(), cfg_.inputs.end(), [](const InputSpec& s) {
+            return s.type == InputSpec::Type::Srt;
+        });
+    if (needCuda) {
+        if (!vk_.hasExternalMemoryFd || !cuda_.init(vk_.deviceUuid())) {
+            MOO_LOGE("SRT requested but Vulkan/CUDA interop unavailable");
+            return false;
+        }
+    }
+
     finder_ = std::make_unique<NdiFinder>();
     for (size_t i = 0; i < cfg_.inputs.size(); ++i) {
         // Spread inputs across both DMA engines; serialized 66MB 8K copies on
         // one queue otherwise hold ring slots in flight long enough to starve
         // the ring.
         auto& q = (i % 2) ? vk_.xferDown() : vk_.xferUp();
-        inputs_.push_back(
-            std::make_unique<NdiReceiver>(vk_, q, *finder_, cfg_.inputs[i], int(i)));
+        const auto& spec = cfg_.inputs[i];
+        if (spec.type == InputSpec::Type::Srt)
+            inputs_.push_back(
+                std::make_unique<SrtInput>(vk_, q, cuda_, spec.ref, int(i)));
+        else
+            inputs_.push_back(
+                std::make_unique<NdiReceiver>(vk_, q, *finder_, spec.ref, int(i)));
     }
     if (cfg_.ndiOut)
         ndiOut_ = std::make_unique<NdiOutput>(cfg_.ndiOutName, *comp_, readbackTL_);
+
+    if (!cfg_.srtUrl.empty()) {
+        srtOut_ = std::make_unique<SrtOutput>(
+            vk_, cuda_, *comp_, renderTL_,
+            SrtOutConfig{cfg_.srtUrl, cfg_.srtBitrateKbps}, cfg_.show);
+        if (!srtOut_->ok()) {
+            MOO_LOGE("SRT out init failed; disabling");
+            srtOut_.reset();
+        }
+    }
 
     clock_ = MediaClock(cfg_.show.fpsN, cfg_.show.fpsD);
     renderThread_ = std::jthread([this](std::stop_token st) { renderLoop(st); });
@@ -91,8 +125,11 @@ bool Engine::buildLabelAtlas() {
     };
     renderRow(0, "PGM");
     renderRow(1, "PVW");
-    for (size_t i = 0; i < cfg_.inputs.size(); ++i)
-        renderRow(2 + int(i), std::to_string(i + 1) + " " + cfg_.inputs[i]);
+    for (size_t i = 0; i < cfg_.inputs.size(); ++i) {
+        std::string name = cfg_.inputs[i].ref;
+        if (name.rfind("srt://", 0) == 0) name = "SRT " + name.substr(6);
+        renderRow(2 + int(i), std::to_string(i + 1) + " " + name);
+    }
 
     gpu::Image atlas = vk_.createImage2D(
         uint32_t(rowW), uint32_t(rowH * rows), VK_FORMAT_R8G8B8A8_UNORM,
@@ -160,6 +197,7 @@ bool Engine::buildLabelAtlas() {
 void Engine::stop() {
     if (!started_) return;
     renderThread_ = {};  // request stop + join
+    srtOut_.reset();     // drains encoder, releases CUDA imports (device alive)
     ndiOut_.reset();     // stops sender before its buffers go away
     inputs_.clear();
     finder_.reset();
@@ -177,6 +215,7 @@ void Engine::stop() {
     comp_.reset();
     ndi::destroy();
     vk_.destroy();
+    cuda_.destroy();
     started_ = false;
     MOO_LOGI("engine stopped");
 }
@@ -323,6 +362,16 @@ void Engine::renderLoop(std::stop_token st) {
         }
         tj.packProgram = packSlot >= 0;
 
+        // -- NV12 pack for SRT: only when the encoder has released this FIF's
+        //    buffer AND the event ring has room. A slow/dead peer costs frames
+        //    on the SRT output only, never render ticks. --
+        bool doNv = false;
+        if (srtOut_) {
+            doNv = srtOut_->copiedValue(fif) >= nvPushed_[fif];
+            if (!doNv) Stats::counter("out.srt.fifBusySkips").add();
+        }
+        tj.packNv12 = doNv;
+
         const int rbSlot = int(value % gpu::Compositor::kReadbackSlots);
         rbStamp_[rbSlot].store(value, std::memory_order_release);
 
@@ -338,11 +387,11 @@ void Engine::renderLoop(std::stop_token st) {
         auto addWait = [&](const gpu::GpuFrame* f) {
             if (!f) return;
             for (const auto& w : waits)
-                if (w.semaphore == f->ring->timeline().handle() &&
+                if (w.semaphore == f->timeline().handle() &&
                     w.value >= f->uploadValue)
                     return;
             waits.push_back(gpu::VkEngine::timelineWait(
-                f->ring->timeline(), f->uploadValue,
+                f->timeline(), f->uploadValue,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT));
         };
         addWait(tj.a);
@@ -357,6 +406,8 @@ void Engine::renderLoop(std::stop_token st) {
         sd.signalInfos = {&signal, 1};
         if (vk_.submit(vk_.gfx(), sd) != VK_SUCCESS) MOO_LOGE("render submit failed");
         fifValues_[fif] = value;
+
+        if (doNv && srtOut_->push({value, n, fif})) nvPushed_[fif] = value;
 
         // -- pack readback on the down queue (chained on this render) --
         if (packSlot >= 0) {

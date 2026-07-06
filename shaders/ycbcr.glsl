@@ -23,6 +23,27 @@ vec3 uyvy_fetch(sampler2D t, ivec2 fullSize, ivec2 xy, int cm) {
     return ycbcr_to_rgb(Y, mp.r, mp.b, cm);
 }
 
+// NV12: per-plane textures filter correctly in hardware.
+vec3 nv12_sample(sampler2D yTex, sampler2D uvTex, vec2 uv, int cm) {
+    float Y = texture(yTex, uv).r;
+    vec2 C = texture(uvTex, uv).rg;
+    return ycbcr_to_rgb(Y, C.x, C.y, cm);
+}
+
+vec3 rgb_to_ycbcr(vec3 rgb, int cm) {
+    float y, cb, cr;
+    if (cm == 1) {  // BT.601
+        y = dot(rgb, vec3(0.299, 0.587, 0.114));
+        cb = (rgb.b - y) / 1.772;
+        cr = (rgb.r - y) / 1.402;
+    } else {        // BT.709
+        y = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+        cb = (rgb.b - y) / 1.8556;
+        cr = (rgb.r - y) / 1.5748;
+    }
+    return vec3(y, cb, cr);
+}
+
 // Manual bilinear in RGB space (converts 4 taps, then filters).
 vec3 uyvy_sample_bilinear(sampler2D t, ivec2 fullSize, vec2 uv, int cm) {
     vec2 p = uv * vec2(fullSize) - 0.5;
