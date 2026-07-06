@@ -4,15 +4,16 @@ A live video switcher for Linux + NVIDIA: NDI inputs, program/preview switching 
 transitions, NDI and SRT (HEVC/NVENC) program outputs, full audio mixer, Qt 6 GUI with
 Vulkan multiview. Built for low latency at up to 8K 59.94p.
 
-Status: **M4 complete** — full audio mixer. Per-input NDI/SRT audio into 10 ms mixer ticks
-on the show clock (fader/mute/solo + 0–500 ms delay trims), audio-follow-video equal-power
-crossfade + FTB dip, −1 dBFS limiter, master A/V-sync delay, GUI meter strips. Embedded in
-the NDI program output (`send_audio_v3`) and as AAC in the SRT MPEG-TS. **Measured
-(flash+tone, both paths simultaneously): NDI av=+4.0 ms, SRT av=−2.1 ms** (gate ±10 ms),
-zero transition pops across all wipe types. Earlier: M3+M3.5 (SRT/HEVC both directions,
-8K60 NVENC 1:1), M2 (transitions/T-bar/NDI out/tally/multiview, 17.7 ms end-to-end),
-M1 (Vulkan engine, 2×8K zero-drop ingest), M0 (instrumentation + 8K bench).
-Next: M5 (8K hardening, two-box SpeedHQ bench).
+Status: **M5 complete** — 8K hardened. Full 8K pipeline (NDI in → composite → NDI out +
+SRT/HEVC out + audio) runs in **<2 cores** with NVENC at 54%, latency **1.6 frames**, zero
+tick overruns through a 30-minute soak; A/V within ±8 ms on every path at 1080p and 8K
+(5 ms mixer grid). Runtime drop/repeat/overrun counters surface in the GUI and at headless
+exit. Measured topology limit: ~5 same-host 8K streams saturate DDR5 (use network sources
+for 2×8K shows); see `docs/bench-m5.md` + `docs/tuning.md`. Open: SpeedHQ codec cost needs
+a remote peer (`scripts/ndi-netns-bench.sh`, one sudo run). Earlier: M4 (audio mixer),
+M3+M3.5 (SRT/HEVC both directions, 8K60 NVENC 1:1), M2 (transitions/T-bar/NDI out/tally/
+multiview), M1 (Vulkan engine, 2×8K zero-drop ingest), M0 (instrumentation + 8K bench).
+Next: M6 (v1 close: persistence, source picker, error banners).
 
 ```sh
 # SRT out (listener) + receive with any ffplay/OBS caller:

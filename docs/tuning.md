@@ -51,3 +51,12 @@ shm path). Codec cost therefore only appears with a remote peer:
 
 NDI's own guidance: memory bandwidth binds before the codec on modern
 CPUs. Until measured, budget 2–4 cores for an 8K SpeedHQ decode.
+
+## Clock discipline
+
+NDI timecodes ride the realtime clock; NTP slew (systemd-timesyncd,
+chrony) shows up as a few ppm of apparent A/V drift in
+timecode-comparing measurements and in timestamp-driven playout over
+hours. The pipeline itself is locked to CLOCK_MONOTONIC and does not
+drift. If downstream playout syncs by NDI timestamps across hours, use
+PTP instead of NTP.
