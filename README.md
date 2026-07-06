@@ -4,13 +4,21 @@ A live video switcher for Linux + NVIDIA: NDI inputs, program/preview switching 
 transitions, NDI and SRT (HEVC/NVENC) program outputs, full audio mixer, Qt 6 GUI with
 Vulkan multiview. Built for low latency at up to 8K 59.94p.
 
-Status: **M2 complete** — a real switcher: mix + 5 wipes + FTB with AUTO and a T-bar, the
-**NDI program output** (GPU UYVY pack → SDK encodes from our readback ring), tally to sources
-(and back — testgen displays it), and a proper multiview (proxy-downscaled tiles, labels from
-an embedded font, tally borders). Measured end-to-end latency through the full chain
-(NDI in → composite → NDI out): **17.7 ms ≈ 1 frame** at 1080p59.94. Earlier: M1 (Vulkan
-engine, 2×8K zero-drop ingest), M0 (instrumentation + 8K bench, `docs/bench-m0.md`).
-Next: M3 (SRT output via NVENC/HEVC).
+Status: **M3 + M3.5 complete** — SRT is in, both directions. Output: program → GPU NV12 pack →
+NVENC HEVC (p4/ull CBR) → MPEG-TS over `srt://` with auto-reconnect; **8K60 encode sustained
+1:1 with the render clock** (NVENC at 54% on the 5090). Input: `--srt-input` ingests SRT/HEVC
+via NVDEC — decoded frames never touch the CPU (CUDA→Vulkan external memory) — verified by
+loopback (one switcher ingesting another's SRT program). Earlier: M2 (transitions/T-bar/
+NDI out/tally/multiview, 17.7 ms end-to-end), M1 (Vulkan engine, 2×8K zero-drop ingest),
+M0 (instrumentation + 8K bench). Next: M4 (audio mixer).
+
+```sh
+# SRT out (listener) + receive with any ffplay/OBS caller:
+./build/mooswitcher --input CamA --input CamB --srt-out "srt://:9710?mode=listener&latency=120000"
+ffplay "srt://HOST:9710?mode=caller"     # latency option is MICROseconds
+# SRT ingest as an input:
+./build/mooswitcher --srt-input "srt://HOST:9710?mode=caller&latency=120000" --input CamB
+```
 
 Run it:
 ```sh
