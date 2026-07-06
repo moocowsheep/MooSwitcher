@@ -1,0 +1,7 @@
+build/
+third_party/
+.cache/
+compile_commands.json
+.vscode/
+*.o
+*.a
