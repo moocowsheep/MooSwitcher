@@ -12,6 +12,7 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 
 find_package(Threads REQUIRED)
 find_package(NDI)
+find_package(Vulkan REQUIRED)
 
 add_library(moo_core STATIC
   src/core/MediaClock.cpp
@@ -21,6 +22,38 @@ add_library(moo_core STATIC
 target_include_directories(moo_core PUBLIC src)
 target_link_libraries(moo_core PUBLIC Threads::Threads)
 target_compile_options(moo_core PRIVATE -Wall -Wextra)
+
+# -- shaders: GLSL -> SPIR-V (glslc) -> embedded C arrays --
+find_program(GLSLC glslc REQUIRED)
+set(MOO_SHADER_HDRS "")
+function(moo_shader name src)
+  set(spv ${CMAKE_BINARY_DIR}/shaders/${name}.spv)
+  set(hdr ${CMAKE_BINARY_DIR}/shaders/${name}.spv.h)
+  add_custom_command(OUTPUT ${hdr}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/shaders
+    COMMAND ${GLSLC} -O --target-env=vulkan1.3 -I ${CMAKE_SOURCE_DIR}/shaders
+            -o ${spv} ${CMAKE_SOURCE_DIR}/shaders/${src}
+    COMMAND ${CMAKE_COMMAND} -DIN=${spv} -DOUT=${hdr} -DNAME=${name}
+            -P ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/${src} ${CMAKE_SOURCE_DIR}/shaders/ycbcr.glsl
+            ${CMAKE_SOURCE_DIR}/cmake/EmbedFile.cmake
+    VERBATIM)
+  list(APPEND MOO_SHADER_HDRS ${hdr})
+  set(MOO_SHADER_HDRS ${MOO_SHADER_HDRS} PARENT_SCOPE)
+endfunction()
+moo_shader(composite_comp composite.comp)
+moo_shader(multiview_tile_comp multiview_tile.comp)
+add_custom_target(moo_shaders DEPENDS ${MOO_SHADER_HDRS})
+
+add_library(moo_gpu STATIC
+  src/gpu/VkEngine.cpp
+  src/gpu/UploadRing.cpp
+  src/gpu/Compositor.cpp
+)
+target_link_libraries(moo_gpu PUBLIC moo_core Vulkan::Vulkan)
+target_include_directories(moo_gpu PUBLIC ${CMAKE_BINARY_DIR})
+target_compile_options(moo_gpu PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+add_dependencies(moo_gpu moo_shaders)
 
 if(NDI_FOUND)
   add_library(moo_ndi STATIC src/ndi/NdiLib.cpp)
@@ -39,6 +72,41 @@ if(NDI_FOUND)
       BUILD_RPATH ${_ndi_libdir}
       INSTALL_RPATH ${_ndi_libdir})
   endforeach()
+
+  add_library(moo_engine STATIC
+    src/engine/Engine.cpp
+    src/ndi/NdiFinder.cpp
+    src/ndi/NdiReceiver.cpp
+  )
+  target_link_libraries(moo_engine PUBLIC moo_gpu moo_ndi)
+  target_compile_options(moo_engine PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+
+  add_executable(moo-headless tools/moo-headless/main.cpp)
+  target_link_libraries(moo-headless PRIVATE moo_engine)
+  target_include_directories(moo-headless PRIVATE tools)
+  set_target_properties(moo-headless PROPERTIES
+    BUILD_RPATH ${_ndi_libdir} INSTALL_RPATH ${_ndi_libdir})
+
+  find_package(Qt6 COMPONENTS Widgets QUIET)
+  if(Qt6_FOUND)
+    add_executable(mooswitcher
+      src/ui/main.cpp
+      src/ui/MainWindow.cpp
+      src/ui/MainWindow.h
+      src/ui/MultiviewWidget.cpp
+      src/ui/MultiviewWidget.h
+      src/ui/EngineBridge.cpp
+      src/ui/EngineBridge.h
+    )
+    set_target_properties(mooswitcher PROPERTIES
+      AUTOMOC ON
+      BUILD_RPATH ${_ndi_libdir}
+      INSTALL_RPATH ${_ndi_libdir})
+    target_link_libraries(mooswitcher PRIVATE moo_engine Qt6::Widgets)
+    target_compile_options(mooswitcher PRIVATE -Wall -Wextra)
+  else()
+    message(WARNING "Qt6 Widgets not found - GUI app will not be built.")
+  endif()
 else()
   message(WARNING "NDI SDK not found - NDI tools will not be built. "
                   "Set NDI_SDK_DIR or populate third_party/ndi.")
@@ -59,8 +127,9 @@ if(MOO_BUILD_TESTS)
     tests/ring_test.cpp
     tests/switcher_core_test.cpp
     tests/strip_test.cpp
+    tests/gpu_composite_test.cpp
   )
-  target_link_libraries(moo_tests PRIVATE moo_core Catch2::Catch2WithMain)
+  target_link_libraries(moo_tests PRIVATE moo_core moo_gpu Catch2::Catch2WithMain)
   target_include_directories(moo_tests PRIVATE tools)
 
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)

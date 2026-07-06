@@ -1,0 +1,48 @@
+#version 450
+// Program compositor: up to two UYVY inputs -> RGBA16F program image.
+// UYVY unpack is fused into sampling (no full-res RGB intermediates).
+// M1 implements cut/mix; wipe branches land in M2 via transType.
+
+#include "ycbcr.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D inA;  // UYVY packed, (w/2, h)
+layout(binding = 1) uniform sampler2D inB;
+layout(binding = 2, rgba16f) uniform writeonly image2D outImg;
+
+layout(push_constant) uniform PC {
+    ivec2 outSize;
+    ivec2 aFull;   // full-res luma dimensions
+    ivec2 bFull;
+    ivec2 _pad;
+    vec4 aMap;     // uvIn = uv * map.xy + map.zw (aspect-fit; outside = black)
+    vec4 bMap;
+    float alpha;   // 0 = A on air, 1 = B fully on air
+    float softness;
+    float ftb;
+    int transType; // 0 = mix (wipes: M2)
+    int aCm;       // 0 = BT.709, 1 = BT.601
+    int bCm;
+} pc;
+
+vec3 fetchInput(sampler2D t, ivec2 full, vec4 map, int cm, vec2 uv) {
+    vec2 uvi = uv * map.xy + map.zw;
+    if (any(lessThan(uvi, vec2(0.0))) || any(greaterThan(uvi, vec2(1.0))))
+        return vec3(0.0);
+    return uyvy_sample_bilinear(t, full, uvi, cm);
+}
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(px, pc.outSize))) return;
+    vec2 uv = (vec2(px) + 0.5) / vec2(pc.outSize);
+
+    vec3 c = fetchInput(inA, pc.aFull, pc.aMap, pc.aCm, uv);
+    if (pc.alpha > 0.0) {
+        vec3 b = fetchInput(inB, pc.bFull, pc.bMap, pc.bCm, uv);
+        c = mix(c, b, pc.alpha);
+    }
+    c *= (1.0 - pc.ftb);
+    imageStore(outImg, px, vec4(c, 1.0));
+}
