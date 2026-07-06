@@ -25,6 +25,7 @@ int main(int argc, char** argv) {
     double dumpEvery = 2.0;
     bool scriptedCuts = false;
     bool scriptedAutos = false;
+    std::vector<std::pair<int, int>> inputDelays;  // {input, ms} audio trims
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -63,6 +64,11 @@ int main(int argc, char** argv) {
         } else if (a == "--audio-delay") {
             const char* v = next();
             if (v) cfg.masterAudioDelayMs = atoi(v);
+        } else if (a == "--input-delay") {
+            const char* v = next();
+            int idx = 0, ms = 0;
+            if (!v || sscanf(v, "%d:%d", &idx, &ms) != 2) return 2;
+            inputDelays.emplace_back(idx, ms);
         } else if (a == "--validate") {
             cfg.validation = true;
         } else {
@@ -85,6 +91,10 @@ int main(int argc, char** argv) {
         MOO_LOGE("engine start failed");
         return 1;
     }
+    if (auto* aud = engine.audio())
+        for (auto [idx, ms] : inputDelays)
+            if (idx >= 0 && idx < aud->inputCount())
+                aud->channel(idx).delayMs.store(ms);
 
     const int64_t t0 = moo::MediaClock::nowNs();
     const int64_t endNs = t0 + int64_t(duration * 1e9);

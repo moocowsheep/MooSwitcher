@@ -2,6 +2,7 @@
 
 #include <mutex>
 
+#include "audio/AudioEngine.h"
 #include "core/Log.h"
 #include "core/Stats.h"
 
@@ -76,17 +77,74 @@ bool SrtInput::openStream() {
     dec_->get_format = &SrtInput::pickCuda;
     if (avcodec_open2(dec_, codec, nullptr) < 0) return false;
 
+    // Audio is optional: decode on the CPU when the TS carries a stream.
+    audIdx_ = av_find_best_stream(ic_, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+    if (audIdx_ >= 0) {
+        const AVCodecParameters* apar = ic_->streams[audIdx_]->codecpar;
+        if (const AVCodec* acodec = avcodec_find_decoder(apar->codec_id)) {
+            adec_ = avcodec_alloc_context3(acodec);
+            if (avcodec_parameters_to_context(adec_, apar) < 0 ||
+                avcodec_open2(adec_, acodec, nullptr) < 0)
+                avcodec_free_context(&adec_);
+        }
+        if (!adec_) {
+            MOO_LOGW("in%d(srt): audio stream present but not decodable",
+                     index_);
+            audIdx_ = -1;
+        }
+    }
+
     connected_.store(true, std::memory_order_relaxed);
-    MOO_LOGI("in%d(srt): connected, %s %dx%d", index_, codec->name, par->width,
-             par->height);
+    MOO_LOGI("in%d(srt): connected, %s %dx%d%s", index_, codec->name,
+             par->width, par->height, adec_ ? " + audio" : "");
     return true;
 }
 
 void SrtInput::closeStream() {
     if (dec_) avcodec_free_context(&dec_);
+    if (adec_) avcodec_free_context(&adec_);
+    if (swr_) swr_free(&swr_);
+    av_channel_layout_uninit(&swrInLayout_);
+    swrInRate_ = 0;
+    swrInFmt_ = -1;
     if (ic_) avformat_close_input(&ic_);
     vidIdx_ = -1;
+    audIdx_ = -1;
     connected_.store(false, std::memory_order_relaxed);
+}
+
+void SrtInput::handleAudioFrame(AVFrame* f) {
+    auto* ch = audioSink_.load(std::memory_order_acquire);
+    if (!ch || f->nb_samples <= 0) return;
+
+    if (!swr_ || f->sample_rate != swrInRate_ || f->format != swrInFmt_ ||
+        av_channel_layout_compare(&f->ch_layout, &swrInLayout_) != 0) {
+        if (swr_) swr_free(&swr_);
+        AVChannelLayout out = AV_CHANNEL_LAYOUT_STEREO;
+        if (swr_alloc_set_opts2(&swr_, &out, AV_SAMPLE_FMT_FLT,
+                                audio::kSampleRate, &f->ch_layout,
+                                AVSampleFormat(f->format), f->sample_rate, 0,
+                                nullptr) < 0 ||
+            swr_init(swr_) < 0) {
+            if (swr_) swr_free(&swr_);
+            MOO_LOGW("in%d(srt): swr init failed for audio", index_);
+            return;
+        }
+        av_channel_layout_copy(&swrInLayout_, &f->ch_layout);
+        swrInRate_ = f->sample_rate;
+        swrInFmt_ = f->format;
+    }
+
+    const int outCap = int(av_rescale_rnd(
+        swr_get_delay(swr_, f->sample_rate) + f->nb_samples,
+        audio::kSampleRate, f->sample_rate, AV_ROUND_UP));
+    aconv_.resize(size_t(outCap) * audio::kChannels);
+    uint8_t* outPtr = reinterpret_cast<uint8_t*>(aconv_.data());
+    const int got =
+        swr_convert(swr_, &outPtr, outCap,
+                    const_cast<const uint8_t**>(f->extended_data),
+                    f->nb_samples);
+    if (got > 0) ch->pushInterleaved(aconv_.data(), got, audio::kSampleRate);
 }
 
 void SrtInput::handleFrame(AVFrame* f) {
@@ -182,6 +240,13 @@ void SrtInput::run(std::stop_token st) {
             if (avcodec_send_packet(dec_, pkt) >= 0) {
                 while (avcodec_receive_frame(dec_, frame) >= 0) {
                     handleFrame(frame);
+                    av_frame_unref(frame);
+                }
+            }
+        } else if (adec_ && pkt->stream_index == audIdx_) {
+            if (avcodec_send_packet(adec_, pkt) >= 0) {
+                while (avcodec_receive_frame(adec_, frame) >= 0) {
+                    handleAudioFrame(frame);
                     av_frame_unref(frame);
                 }
             }

@@ -72,7 +72,7 @@ target_link_libraries(CudaDriver INTERFACE ${CUDA_DRIVER_LIB})
 target_include_directories(CudaDriver SYSTEM INTERFACE ${CUDA_DRIVER_INC})
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavformat libavutil)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavformat libavutil libswresample)
 
 add_library(moo_media STATIC
   src/media/CudaCtx.cpp

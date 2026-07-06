@@ -3,6 +3,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "engine/IInputSource.h"
 #include "gpu/Nv12Ring.h"
@@ -12,6 +13,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libswresample/swresample.h>
 }
 
 namespace moo {
@@ -19,8 +21,9 @@ namespace moo {
 // SRT/HEVC (or H.264) ingest: libavformat reads the TS, NVDEC decodes into
 // CUDA frames, one device-to-device copy lands NV12 planes in an Nv12Ring's
 // exported staging buffer, and Vulkan copies to Y/UV images. Decode never
-// touches the CPU pixel path. Reconnects with backoff; same latest-frame
-// mailbox contract as the NDI receiver.
+// touches the CPU pixel path. The TS's audio stream (if any) is decoded on
+// the CPU and swresampled to the mixer's 48 kHz stereo f32. Reconnects with
+// backoff; same latest-frame mailbox contract as the NDI receiver.
 class SrtInput : public IInputSource {
 public:
     SrtInput(gpu::VkEngine& eng, gpu::Queue& uploadQueue, media::CudaCtx& cuda,
@@ -41,6 +44,7 @@ private:
     bool openStream();
     void closeStream();
     void handleFrame(AVFrame* f);
+    void handleAudioFrame(AVFrame* f);
     static int interruptCb(void* opaque);
     static AVPixelFormat pickCuda(AVCodecContext*, const AVPixelFormat* fmts);
 
@@ -54,6 +58,14 @@ private:
     AVFormatContext* ic_ = nullptr;
     AVCodecContext* dec_ = nullptr;
     int vidIdx_ = -1;
+
+    AVCodecContext* adec_ = nullptr;
+    int audIdx_ = -1;
+    SwrContext* swr_ = nullptr;
+    AVChannelLayout swrInLayout_{};
+    int swrInRate_ = 0;
+    int swrInFmt_ = -1;
+    std::vector<float> aconv_;  // decode-thread scratch
 
     std::shared_ptr<gpu::Nv12Ring> ring_;
     media::CudaCtx::Imported imports_[gpu::Nv12Ring::kSlots]{};
