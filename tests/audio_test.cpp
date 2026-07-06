@@ -62,7 +62,7 @@ TEST_CASE("audio ring: bulk write/read with wrap and drop accounting") {
 }
 
 TEST_CASE("mixer: program passes through at unity after gain ramp-in") {
-    MixerCore core(2);
+    MixerCore core(2, 480);
     Mix1 m(2);
     MixerCore::ChannelParams p[2];
     MixSnapshot snap{0, 1, 0.f, 0.f};
@@ -80,7 +80,7 @@ TEST_CASE("mixer: program passes through at unity after gain ramp-in") {
 }
 
 TEST_CASE("mixer: equal-power crossfade follows alpha; preview lands clean") {
-    MixerCore core(2);
+    MixerCore core(2, 480);
     Mix1 m(2);
     MixerCore::ChannelParams p[2];
 
@@ -108,7 +108,7 @@ TEST_CASE("mixer: equal-power crossfade follows alpha; preview lands clean") {
 }
 
 TEST_CASE("mixer: same source on both buses holds level through transition") {
-    MixerCore core(2);
+    MixerCore core(2, 480);
     Mix1 m(2);
     MixerCore::ChannelParams p[2];
     const auto sig = dcChunk(0.5f);
@@ -124,7 +124,7 @@ TEST_CASE("mixer: same source on both buses holds level through transition") {
 }
 
 TEST_CASE("mixer: mute silences program; meters go quiet too") {
-    MixerCore core(2);
+    MixerCore core(2, 480);
     Mix1 m(2);
     MixerCore::ChannelParams p[2];
     p[0].mute = true;
@@ -139,7 +139,7 @@ TEST_CASE("mixer: mute silences program; meters go quiet too") {
 }
 
 TEST_CASE("mixer: solo isolates even an off-air input") {
-    MixerCore core(2);
+    MixerCore core(2, 480);
     Mix1 m(2);
     MixerCore::ChannelParams p[2];
     p[1].solo = true;  // input 1 is not on program
@@ -154,7 +154,7 @@ TEST_CASE("mixer: solo isolates even an off-air input") {
 }
 
 TEST_CASE("mixer: per-input delay shifts by the configured frames") {
-    MixerCore core(1);
+    MixerCore core(1, 480);
     Mix1 m(1);
     MixerCore::ChannelParams p[1];
     p[0].delayFrames = 100;
@@ -176,7 +176,7 @@ TEST_CASE("mixer: per-input delay shifts by the configured frames") {
 }
 
 TEST_CASE("mixer: master delay shifts the mixed output") {
-    MixerCore core(1);
+    MixerCore core(1, 480);
     Mix1 m(1);
     MixerCore::ChannelParams p[1];
     MixSnapshot snap{0, 0, 0.f, 0.f};
@@ -194,7 +194,7 @@ TEST_CASE("mixer: master delay shifts the mixed output") {
 }
 
 TEST_CASE("mixer: FTB dips to silence and back") {
-    MixerCore core(1);
+    MixerCore core(1, 480);
     Mix1 m(1);
     MixerCore::ChannelParams p[1];
     const auto sig = dcChunk(0.5f);
@@ -216,7 +216,7 @@ TEST_CASE("mixer: FTB dips to silence and back") {
 }
 
 TEST_CASE("mixer: limiter caps hot program at the ceiling, leaves quiet alone") {
-    MixerCore core(1);
+    MixerCore core(1, 480);
     Mix1 m(1);
     MixerCore::ChannelParams p[1];
     MixSnapshot snap{0, 0, 0.f, 0.f};
@@ -231,7 +231,7 @@ TEST_CASE("mixer: limiter caps hot program at the ceiling, leaves quiet alone") 
     REQUIRE(peak > 0.80f);  // limited, not crushed
     REQUIRE(m.inPeak[0] > 1.9f);  // input meter still shows the hot source
 
-    MixerCore quietCore(1);
+    MixerCore quietCore(1, 480);
     const auto quiet = sineChunk(0.3f);
     in[0] = quiet.data();
     quietCore.process(in, p, snap, 0, m.out.data(), m.inPeak.data(), m.masterPeak);
@@ -241,7 +241,7 @@ TEST_CASE("mixer: limiter caps hot program at the ceiling, leaves quiet alone") 
 }
 
 TEST_CASE("mixer: fader gain scales output and meters") {
-    MixerCore core(1);
+    MixerCore core(1, 480);
     Mix1 m(1);
     MixerCore::ChannelParams p[1];
     p[0].gain = 0.25f;
@@ -290,8 +290,9 @@ TEST_CASE("audio engine: sinks receive contiguous sample counters") {
     eng.stop();
 
     REQUIRE(firsts.size() >= 8);
-    for (size_t i = 0; i < firsts.size(); ++i) REQUIRE(counts[i] == 480);
+    for (size_t i = 0; i < firsts.size(); ++i)
+        REQUIRE(counts[i] == kChunkFrames);
     if (eng.mixSkips() == 0)
         for (size_t i = 1; i < firsts.size(); ++i)
-            REQUIRE(firsts[i] == firsts[i - 1] + 480);
+            REQUIRE(firsts[i] == firsts[i - 1] + kChunkFrames);
 }

@@ -6,7 +6,11 @@ namespace moo::audio {
 
 constexpr int kSampleRate = 48000;
 constexpr int kChannels = 2;       // stereo bus in v1
-constexpr int kChunkFrames = 480;  // 10 ms mixer tick
+// 5 ms mixer tick. Simulated worst-phase ring fill against NDI's ~16.7 ms
+// audio burst cadence: prefill 960 + chunk 240 never dips below 566 frames
+// (chunk 480: 328), and the finer grid halves mean chunk-quantization
+// latency -- measured ~2.5 ms off both output paths' A/V centers.
+constexpr int kChunkFrames = 240;
 constexpr int kMaxInputDelayMs = 500;
 constexpr int kMaxMasterDelayMs = 200;
 

@@ -52,9 +52,9 @@ private:
     bool holding_ = true;      // mixer-thread: wait for prefill before playing
 };
 
-// The audio mixer thread: 10 ms ticks on the SAME clock origin as the video
-// render loop (sample index n*480 lines up with video tick time exactly), so
-// output sample counts are valid PTS against video tick PTS. Each tick pulls
+// The audio mixer thread: 5 ms ticks on the SAME clock origin as the video
+// render loop (sample index m*kChunkFrames lines up with mixer tick time
+// exactly), so output sample counts are valid PTS against video tick PTS. Each tick pulls
 // the input rings, runs MixerCore with the latest video bus snapshot, updates
 // meters, and fans the master chunk out to PCM sinks (NDI embed, AAC->TS).
 // Sinks run on the mixer thread and must never block.
@@ -96,7 +96,7 @@ private:
 
     std::vector<std::unique_ptr<InputChannel>> channels_;
     MixerCore core_;
-    MediaClock clk_{100, 1};  // 10 ms ticks, 480 samples each
+    MediaClock clk_{200, 1};  // 5 ms ticks, kChunkFrames samples each
     std::vector<PcmSink> sinks_;
     std::atomic<uint64_t> mixSnap_;
     std::atomic<int64_t> ticks_{0}, skips_{0};

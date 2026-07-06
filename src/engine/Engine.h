@@ -43,7 +43,11 @@ struct EngineConfig {
     std::string srtUrl;      // empty = SRT output off
     int srtBitrateKbps = 0;  // 0 = auto
     bool audio = true;
-    int masterAudioDelayMs = 5;  // A/V calibration: centers NDI & SRT paths
+    // A/V calibration. Measured on this box: with 0, offsets land at
+    // 1080p NDI ~-1ms / SRT ~-7ms, 8K NDI ~+7ms (audio ages ~one capture
+    // iteration more at 8K) -- all inside the +-10ms gate. Operators
+    // re-trim per show from the GUI master strip.
+    int masterAudioDelayMs = 0;
 };
 
 // Owns the GPU, the NDI inputs and program output, the switcher state

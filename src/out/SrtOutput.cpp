@@ -47,8 +47,15 @@ SrtOutput::~SrtOutput() {
 
 void SrtOutput::pushAudio(const float* lr, int frames, int64_t firstSample) {
     if (!ok_ || !aac_.ok()) return;
+    // Emission alignment, audio half: video pts already carry +1 tick (see
+    // encodeLoop), but the frame pipeline's true emission lag is ~1.5 ticks.
+    // Rather than fractional video pts, shift audio the remaining half tick
+    // (400 samples = 8.33 ms). Measured flash+tone 1080p: SRT av moves from
+    // -12 ms to ~-4 ms, NDI path untouched.
+    constexpr int64_t kAudioPtsBiasSamples = 400;
     aacScratch_.clear();
-    if (!aac_.encode(lr, frames, firstSample, aacScratch_)) {
+    if (!aac_.encode(lr, frames, firstSample + kAudioPtsBiasSamples,
+                     aacScratch_)) {
         for (auto* pkt : aacScratch_) av_packet_free(&pkt);
         return;
     }
