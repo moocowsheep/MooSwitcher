@@ -5,3 +5,6 @@ compile_commands.json
 .vscode/
 *.o
 *.a
+scratch-ndi-host/
+scratch-ndi-ns/
+scratch-logs/
