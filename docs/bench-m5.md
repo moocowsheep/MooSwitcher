@@ -83,10 +83,41 @@ the monotonic show clock). Long NDI-timestamp-driven playout chains
 should discipline clocks with PTP, not NTP, if sub-frame sync matters
 across hours.
 
-## Open item — SpeedHQ codec cost (plan risk #1)
+## SpeedHQ codec cost (plan risk #1) — MEASURED
 
-Still unmeasured: same-host shm bypasses the codec and ignores transport
-config (verified: TCP-only ndi-config leaves CPU and 1.6 ms shm latency
-unchanged). Requires either the second box on the 10 GbE link (was
-offline during M5) or one sudo run of `scripts/ndi-netns-bench.sh`.
-Budget until then: 2–4 cores per remote 8K decode.
+Bench: `scripts/ndi-netns-bench.sh` (net+mount+UTS namespaces fake a second
+machine; veth >> 10 GbE so the codec, not the wire, binds) with
+`moo-testgen --noise` (video-range noise = worst-case codec content; the
+default bars compress ~1000× and hide the codec entirely — which is also
+why every earlier "same-host is uncompressed/free" observation was wrong).
+
+**Correction to the M0 finding: same-host NDI is ALSO SpeedHQ-compressed**
+(NDI 6.3.2). The sender encodes every frame whether or not receivers exist,
+and local receivers decode: local vs remote noise receive cost is within 2%
+(51.7% vs 53.5% of a core at 1080p), and local latency jumps 1.6 ms →
+12.1 ms for noise vs bars. "shm = uncompressed" was a bars artifact.
+
+| measurement (59.94p, noise unless noted) | result |
+|---|---|
+| wire bitrate: 1080p / 8K noise / 8K mid-entropy* | 0.50 / 5.8 / 1.8 Gbps |
+| encode, in-sender, always-on: 1080p / 8K | ~0.25 / **~1.8–2.0 cores** |
+| network TX on top when pulled: 8K @5.8G / @1.8G | +0.4 / +0.3 cores |
+| decode+receive: 1080p (local ≈ remote) | ~0.5 cores |
+| decode 8K noise, remote | **~4 cores AND fails**: 2/3 frames dropped, 316 ms latency |
+| receive 8K noise, same-host local channel | **hard stall: 0 frames delivered**, sender pinned at 337% (SDK envelope limit at ~12 MB/frame) |
+| engine: 8K mid-entropy* program + NDI out | 175% (no consumer) / 205% (remote consumer @1.8 Gbps), 0 tick overruns |
+
+\* mid-entropy = 1080p noise upscaled to the 8K show — a realistic
+stand-in between bars and raw noise.
+
+**Verdicts.** Full-bandwidth 8K NDI *ingest* of real-entropy content is not
+viable on this CPU (decode wall ~4 cores/stream, and the 6.3.2 local channel
+stalls outright at 8K-noise frame sizes) — **SRT/HEVC via NVDEC is the 8K
+transport** (proven 8K60 in M3/M5). NDI ingest is comfortable through 4K
+(worst-case ~2 cores, realistic ~1). Our 8K NDI program out with realistic
+content costs ~2 cores total including the always-on encode and holds 59.94
+with zero overruns; at worst-case 5.8 Gbps the 10 GbE link itself would
+saturate — the plan's "NDI out at 4K proxy while SRT carries native 8K"
+fallback is the right production shape. The M5 same-host topology-limit
+finding stands empirically, but its mechanism includes SpeedHQ encode/decode
+on every local hop, not just memcpy bandwidth.

@@ -37,20 +37,24 @@ overruns in the 30-min soak). If a smaller host shows `render.skips` or
 compilers) away from the app rather than pinning the app: the NDI SDK
 manages its own thread pool and reacts badly to a shrunken cpuset.
 
-## The SpeedHQ unknown (remote NDI codec cost)
+## SpeedHQ codec budgets (measured — see docs/bench-m5.md)
 
-Same-host runs never touch the SpeedHQ codec (shm carries uncompressed
-frames — verified: forcing TCP-only in ndi-config does not disengage the
-shm path). Codec cost therefore only appears with a remote peer:
+Same-host NDI is compressed too (NDI 6.3.2: senders encode every frame,
+always; local receivers decode) — don't assume local hops are free. With
+worst-case content (`moo-testgen --noise`):
 
-- Real bench: second machine on the 10 GbE link running `moo-testgen`.
-- One-machine bench: `sudo scripts/ndi-netns-bench.sh up` puts a testgen
-  in a network namespace so NDI treats it as remote (veth carries
-  >10 Gbps; the codec, not the wire, is the bottleneck). Measure with
-  `scripts/cpu_sample.py`.
+- 1080p: ~0.25 core encode, ~0.5 core decode, ~0.5 Gbps. Comfortable.
+- 4K (interpolated): ~1 core encode, ~2 cores decode worst-case. Fine.
+- **8K: not viable as NDI ingest** — decode needs ~4 cores and still
+  drops frames; the same-host local channel stalls outright. Use
+  SRT/HEVC (NVDEC) for 8K ingest, and prefer the 4K-proxy NDI out +
+  native-8K SRT out shape for delivery. Our 8K NDI program out itself
+  is fine (~2 cores with realistic content), but worst-case content
+  is ~5.8 Gbps on the wire — mind the 10 GbE link.
 
-NDI's own guidance: memory bandwidth binds before the codec on modern
-CPUs. Until measured, budget 2–4 cores for an 8K SpeedHQ decode.
+Re-run the bench anytime: `sudo scripts/ndi-netns-bench.sh up && sudo
+scripts/ndi-netns-bench.sh bench`, then measure with
+`scripts/cpu_sample.py`; `sudo scripts/ndi-netns-bench.sh down` when done.
 
 ## Clock discipline
 

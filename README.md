@@ -9,8 +9,8 @@ Status: **v1 complete (M0–M6)**. 8K-hardened engine (30-min soak: zero tick ov
 on NDI and SRT paths at 1080p and 8K), live source picker (swap NDI/SRT sources per input
 mid-show), show-file persistence (restart restores everything), health banners, runtime
 counters in the GUI. Bench record: `docs/bench-m5.md`; tuning: `docs/tuning.md`.
-Open item: SpeedHQ codec cost needs a remote peer (`scripts/ndi-netns-bench.sh`, one sudo
-run, or a second box). Milestones: M6 (v1 close), M5 (8K hardening), M4 (audio),
+SpeedHQ measured (plan risk #1 closed): same-host NDI is compressed too; 8K NDI ingest is
+not viable (use SRT/HEVC — NVDEC), NDI is comfortable through 4K; see `docs/bench-m5.md`. Milestones: M6 (v1 close), M5 (8K hardening), M4 (audio),
 M3+M3.5 (SRT/HEVC both directions), M2 (switching/multiview), M1 (Vulkan engine), M0 (bench).
 
 ```sh

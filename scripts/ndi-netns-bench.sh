@@ -45,6 +45,41 @@ sender)
     exec ip netns exec $NS ./build/moo-testgen --name MooNetBench \
         --size "$SIZE" --precompute 24
     ;;
+bench)
+    # Start the fixed bench fleet inside the namespace (backgrounded, logs
+    # in ./scratch-logs/): an 8K and a 1080p sender, plus a receiver that
+    # pulls the host's "MooSwitcher PGM" whenever it exists (the encode-side
+    # probe). Network netns alone is NOT enough: the NDI SDK rendezvouses
+    # same-machine peers through the filesystem (observed: a unix-socket
+    # marker at /tmp/NTK_NDI_QUIC_SERVER_V5_<port>, plus /dev/shm) and then
+    # moves pixels over that local channel regardless of IPs. The fleet
+    # therefore gets private /tmp and /dev/shm (mount ns) and its own
+    # hostname (UTS ns); logs go to the repo, which stays shared on purpose.
+    # Teardown from the host: pkill -x moo-testgen / moo-latmeter.
+    NSCFG="$PWD/scratch-ndi-ns"
+    LOGS="$PWD/scratch-logs"
+    mkdir -p "$NSCFG" "$LOGS"
+    # Running under sudo: the fleet writes here as the invoking user.
+    chown "${SUDO_USER:-$USER}" "$NSCFG" "$LOGS" 2>/dev/null || true
+    printf '{ "ndi": { "networks": { "ips": "%s" } } }\n' $HOST_IP \
+        > "$NSCFG/ndi-config.v1.json"
+    chmod 644 "$NSCFG/ndi-config.v1.json"
+    ip netns exec $NS unshare --uts --mount sh -c "
+        hostname moo-netbench
+        mount -t tmpfs -o size=2g tmpfs /dev/shm
+        mount -t tmpfs -o size=1g tmpfs /tmp
+        exec sudo -u '${SUDO_USER:-$USER}' sh -c \"
+            cd '$PWD'
+            nohup ./build/moo-testgen --name MooNet8K --size 7680x4320 \
+                --precompute 24 --noise --quiet > '$LOGS/nb-tg8k.log' 2>&1 &
+            nohup ./build/moo-testgen --name MooNet1080 --noise --quiet \
+                > '$LOGS/nb-tg1080.log' 2>&1 &
+            NDI_CONFIG_DIR='$NSCFG' nohup ./build/moo-latmeter \
+                --source 'MooSwitcher PGM' --find-timeout 3600 \
+                --duration 3600 --quiet --csv '$LOGS/nb-recv.csv' \
+                > '$LOGS/nb-recv.log' 2>&1 &
+            echo 'bench fleet started (isolated /tmp, /dev/shm, hostname)'\""
+    ;;
 down)
     ip netns del $NS 2>/dev/null || true
     ip link del veth-nb0 2>/dev/null || true

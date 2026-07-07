@@ -36,6 +36,7 @@ struct Options {
     double duration = 0;  // seconds, 0 = until signal
     bool audio = true;
     bool quiet = false;
+    bool noise = false;  // worst-case codec content instead of bars
 };
 
 bool parseFps(const std::string& s, int64_t& n, int64_t& d) {
@@ -79,13 +80,15 @@ bool parseArgs(int argc, char** argv, Options& o) {
             o.duration = atof(v);
         } else if (a == "--no-audio") {
             o.audio = false;
+        } else if (a == "--noise") {
+            o.noise = true;
         } else if (a == "--quiet") {
             o.quiet = true;
         } else {
             fprintf(stderr,
                     "usage: moo-testgen [--name S] [--size WxH] [--fps N/D|F]\n"
                     "                   [--precompute K] [--duration SECS]\n"
-                    "                   [--no-audio] [--quiet]\n");
+                    "                   [--no-audio] [--noise] [--quiet]\n");
             return false;
         }
     }
@@ -139,7 +142,12 @@ int main(int argc, char** argv) {
     for (int i = 0; i < K; ++i) {
         slots[i].resize(frameBytes);
         pat::fillBars(slots[i].data(), strideBytes, opt.width, opt.height);
-        pat::bakeMovingBar(slots[i].data(), strideBytes, opt.width, opt.height, i, K);
+        if (opt.noise)
+            pat::fillNoise(slots[i].data(), strideBytes, opt.width, opt.height,
+                           uint32_t(i));
+        else
+            pat::bakeMovingBar(slots[i].data(), strideBytes, opt.width,
+                               opt.height, i, K);
     }
 
     // Audio: stereo FLTP, chunk per video tick, tone burst after each flash.

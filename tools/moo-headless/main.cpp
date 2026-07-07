@@ -62,6 +62,8 @@ int main(int argc, char** argv) {
             scriptedAutos = true;  // auto-transition every 2.5s, cycling types
         } else if (a == "--no-ndi-out") {
             cfg.ndiOut = false;
+        } else if (a == "--ndi-out-name") {
+            if (const char* v = next()) cfg.ndiOutName = v;
         } else if (a == "--srt-out") {
             if (const char* v = next()) cfg.srtUrl = v;
         } else if (a == "--srt-bitrate") {

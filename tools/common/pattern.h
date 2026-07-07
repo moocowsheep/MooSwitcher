@@ -142,6 +142,31 @@ inline void fillBars(uint8_t* buf, int strideBytes, int W, int H) {
                      16, 128, 128);
 }
 
+// Video-range noise over the pattern region: defeats DCT + entropy coding,
+// giving worst-case (representative-upper-bound) codec load -- bars compress
+// ~1000x under SpeedHQ and make codec benches meaningless. Seed per slot so
+// a precomputed ring plays as temporal chaos.
+inline void fillNoise(uint8_t* buf, int strideBytes, int W, int H,
+                      uint32_t seed) {
+    uint32_t s = seed * 2654435761u + 12345u;
+    auto rnd = [&] {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        return s;
+    };
+    for (int y = kPatternTop; y < H; ++y) {
+        uint8_t* p = buf + size_t(y) * strideBytes;
+        for (int x = 0; x < W * 2; x += 4) {
+            const uint32_t r = rnd();
+            p[x + 0] = uint8_t(16 + (r & 0xFF) % 209);
+            p[x + 1] = uint8_t(16 + ((r >> 8) & 0xFF) % 220);
+            p[x + 2] = uint8_t(16 + ((r >> 16) & 0xFF) % 209);
+            p[x + 3] = uint8_t(16 + ((r >> 24) & 0xFF) % 220);
+        }
+    }
+}
+
 // Moving bar: white vertical bar over the bars region; position by slot so a
 // precomputed ring of K frames loops seamlessly.
 inline void bakeMovingBar(uint8_t* buf, int strideBytes, int W, int H, int slot,
