@@ -136,6 +136,28 @@ is untouched (G4).
   doing its job. Unit test: "sync-managed lane drops connect backlog at
   hold release" (56th test).
 
-## Soak
+## Soak (test 5) — PASSED 2026-07-07
 
-(30 min, mixed 1080p NDI + 8K SRT inputs, N=1 — results below)
+30 min, 1080p NDI + 8K-bars-over-SRT (NVENC→NVDEC), both N=1, autos every
+2.5 s, NDI out. 107,895 render ticks.
+
+- **0 tick skips**; NDI out delivered every tick. Both inputs held full
+  59.94 (in0 107,866 / in1 107,869 frames).
+- **Audio: 0 skips; underruns = 1**, in the first second during SRT
+  connect (lane arm), frozen for the remaining 29:59. Steady state meets
+  the 0-underrun gate; the arm-time blip is the trim-to-prefill fix
+  leaving no headroom when the first post-arm chunk lands late —
+  inaudible (lane re-arms silently), noted as expected.
+- **RSS flat**: 60 samples, 4.3 MB band around 405 MB.
+- **sync.starves: in0 (NDI) = 0** — the gate as written, met exactly; in0
+  ran the entire soak with *no* sync events at all. in1 (8K SRT/NVDEC,
+  co-located sender) logged the characterized burst residual: 11 starves /
+  43 slipDrops / 4 overflows / 27 waits over 107,895 ticks (~1 single-frame
+  excursion per 100 s; see the SRT-input section — this is the documented
+  N=1 limit under co-located load, not a regression).
+- Auto trim finals: in0 31.3 ms, in1 28.1 ms applied; in1 trimClamped
+  gauge 0.2 ms (deadband noise). The change-detecting log monitor saw zero
+  counter movement between the first status line and shutdown.
+
+Frame sync validation (tests 1–5) is complete; the listening test
+(test 6) remains a human item.
