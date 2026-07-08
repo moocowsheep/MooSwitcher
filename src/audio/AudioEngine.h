@@ -24,12 +24,47 @@ class InputChannel {
 public:
     InputChannel() : ring_(size_t(kRingFrames) * kChannels) {}
 
+    // No sender pts available for a pushed chunk.
+    static constexpr int64_t kNoPts = INT64_MIN;
+
     // Writer side (one capture/decode thread per channel). Planar callers
     // with mono sources pass the same plane twice. Non-48k audio is counted
     // and dropped (NDI/SRT sources are 48 kHz in practice; v1 does not
-    // resample on this path).
-    void pushPlanar(const float* l, const float* r, int frames, int rate);
-    void pushInterleaved(const float* lr, int frames, int rate);
+    // resample on this path). senderPtsNs (same clock as the input's video
+    // pts) feeds the frame-sync A/V measurement below; pass kNoPts when the
+    // source doesn't timestamp audio.
+    void pushPlanar(const float* l, const float* r, int frames, int rate,
+                    int64_t senderPtsNs = kNoPts);
+    void pushInterleaved(const float* lr, int frames, int rate,
+                         int64_t senderPtsNs = kNoPts);
+
+    // Frame-sync auto A/V trim (docs/design-framesync.md 3.4). The channel
+    // keeps an EWMA of (estimated ring playout time - sender pts), sampled
+    // at push. The render thread subtracts it from the video side's
+    // (present time - pts) EWMA -- the sender-clock terms cancel exactly --
+    // and stores the result as the auto delay target; the mixer slews its
+    // applied value toward it (jumping only while the lane re-arms, so a
+    // live signal never steps audibly). autoDelayGen bumps invalidate the
+    // mixer's applied value (input replace).
+    int64_t playoutMinusPtsNs(int64_t nowNs) const {
+        const int64_t at = pmpAtNs_.load(std::memory_order_relaxed);
+        if (!at || nowNs - at > 1'000'000'000LL) return kNoPts;
+        return pmp_.load(std::memory_order_relaxed);
+    }
+    std::atomic<int> autoDelayFrames{0};   // target, render thread -> mixer
+    std::atomic<uint32_t> autoDelayGen{0};  // bump = reset applied to target
+
+    // Sync-enabled inputs: on every prefill-hold release, the mixer trims the
+    // ring down to exactly kPrefillFrames before playback starts. A connect
+    // (or reconnect) can land the transport's whole buffered backlog in the
+    // ring within one mixer tick -- SRT's latency window is up to 100+ ms --
+    // and the hold releases the moment fill >= prefill, parking a random
+    // [prefill, kMaxFillFrames] of extra latency for the whole session. The
+    // video lane drops that same backlog (sync overflow/resync at acquire),
+    // so audio must too or the auto trim's DC is a per-connect lottery (and
+    // negative demand clamps at 0: audio cannot be advanced). The dropped
+    // samples were never audible -- the lane was holding. Off stays v1 (G4).
+    std::atomic<bool> syncManaged{false};
 
     // Controls (any thread).
     std::atomic<float> gain{1.f};  // linear fader gain
@@ -47,9 +82,13 @@ public:
 
 private:
     friend class AudioEngine;
+    void notePts(int64_t senderPtsNs);  // writer thread, before ring write
+
     AudioRing ring_;
     std::vector<float> conv_;  // writer-thread interleave scratch
     bool holding_ = true;      // mixer-thread: wait for prefill before playing
+    std::atomic<int64_t> pmp_{0};     // (playout - pts) EWMA
+    std::atomic<int64_t> pmpAtNs_{0};  // last sample time; 0 = never
 };
 
 // The audio mixer thread: 5 ms ticks on the SAME clock origin as the video

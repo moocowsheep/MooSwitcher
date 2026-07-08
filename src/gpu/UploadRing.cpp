@@ -32,8 +32,10 @@ const Timeline& GpuFrame::timeline() const {
     return nv12 ? nv12->timeline() : uyvy->timeline();
 }
 
-UploadRing::UploadRing(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQueue)
-    : eng_(eng), desc_(desc), queue_(xferQueue) {
+UploadRing::UploadRing(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQueue,
+                       int slots)
+    : eng_(eng), desc_(desc), queue_(xferQueue),
+      slots_(new Slot[size_t(slots)]), nSlots_(slots) {
     pool_ = eng_.createCommandPool(queue_.family);
     tl_ = eng_.createTimeline();
 
@@ -42,7 +44,8 @@ UploadRing::UploadRing(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQu
     cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cai.commandBufferCount = 1;
 
-    for (auto& s : slots_) {
+    for (int i = 0; i < nSlots_; ++i) {
+        auto& s = slots_[i];
         // Upload staging: WC (coherent, deliberately not cached) -- CPU streams in.
         s.staging = eng_.createBuffer(
             desc_.frameBytes(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -60,21 +63,21 @@ UploadRing::~UploadRing() {
     // Wait out our own submissions; render refs are gone by construction
     // (frames hold the shared_ptr that keeps us alive).
     if (tl_.lastReserved()) tl_.waitCompleted(tl_.lastReserved(), 2'000'000'000);
-    for (auto& s : slots_) {
-        eng_.destroyBuffer(s.staging);
-        eng_.destroyImage(s.image);
+    for (int i = 0; i < nSlots_; ++i) {
+        eng_.destroyBuffer(slots_[i].staging);
+        eng_.destroyImage(slots_[i].image);
     }
     if (pool_) vkDestroyCommandPool(eng_.device(), pool_, nullptr);
     eng_.destroyTimeline(tl_);
 }
 
 int UploadRing::acquire() {
-    for (int i = 0; i < kSlots; ++i) {
-        const int s = (cursor_ + i) % kSlots;
+    for (int i = 0; i < nSlots_; ++i) {
+        const int s = (cursor_ + i) % nSlots_;
         auto& slot = slots_[s];
         if (slot.renderRefs.load(std::memory_order_acquire) > 0) continue;
         if (slot.lastSubmit > tl_.completed()) continue;  // upload in flight
-        cursor_ = (s + 1) % kSlots;
+        cursor_ = (s + 1) % nSlots_;
         return s;
     }
     return -1;

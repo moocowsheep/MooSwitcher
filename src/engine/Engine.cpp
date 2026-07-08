@@ -4,12 +4,18 @@
 #include <cstring>
 
 #include "core/Font5x7.h"
+#include "engine/FrameSync.h"
 #include "in/SrtInput.h"
 #include "core/Log.h"
 #include "core/Stats.h"
 #include "ndi/NdiLib.h"
 #include "out/NdiOutput.h"
 #include "out/SrtOutput.h"
+#ifdef MOO_HAVE_OMT
+#include <libomt.h>
+
+#include "omt/OmtInput.h"
+#endif
 
 namespace moo {
 
@@ -31,10 +37,33 @@ std::vector<NdiFinder::Source> Engine::ndiSources() const {
     return finder_ ? finder_->snapshot() : std::vector<NdiFinder::Source>{};
 }
 
+std::vector<std::string> Engine::omtSources() const {
+    std::vector<std::string> out;
+#ifdef MOO_HAVE_OMT
+    int count = 0;
+    char** addrs = omt_discovery_getaddresses(&count);
+    for (int i = 0; addrs && i < count; ++i)
+        if (addrs[i]) out.emplace_back(addrs[i]);
+#endif
+    return out;
+}
+
 std::string Engine::inputRef(int i) const {
     std::lock_guard lk(replaceM_);
     if (i < 0 || i >= int(cfg_.inputs.size())) return {};
     return cfg_.inputs[size_t(i)].ref;
+}
+
+InputSpec::Type Engine::inputType(int i) const {
+    std::lock_guard lk(replaceM_);
+    if (i < 0 || i >= int(cfg_.inputs.size())) return InputSpec::Type::Ndi;
+    return cfg_.inputs[size_t(i)].type;
+}
+
+int Engine::inputSyncFrames(int i) const {
+    std::lock_guard lk(replaceM_);
+    if (i < 0 || i >= int(cfg_.inputs.size())) return -1;
+    return cfg_.inputs[size_t(i)].syncFrames;
 }
 
 bool Engine::start(const EngineConfig& cfg) {
@@ -80,11 +109,23 @@ bool Engine::start(const EngineConfig& cfg) {
         auto& q = (i % 2) ? vk_.xferDown() : vk_.xferUp();
         const auto& spec = cfg_.inputs[i];
         if (spec.type == InputSpec::Type::Srt)
-            inputs_.push_back(
-                std::make_unique<SrtInput>(vk_, q, cuda_, spec.ref, int(i)));
+            inputs_.push_back(std::make_unique<SrtInput>(
+                vk_, q, cuda_, spec.ref, int(i), spec.syncFrames));
+        else if (spec.type == InputSpec::Type::Omt)
+#ifdef MOO_HAVE_OMT
+            inputs_.push_back(std::make_unique<OmtInput>(
+                vk_, q, spec.ref, int(i), spec.syncFrames));
+#else
+        {
+            MOO_LOGE("in%d: OMT input requested but built without OMT SDK; "
+                     "input will stay dark", int(i));
+            inputs_.push_back(std::make_unique<NdiReceiver>(
+                vk_, q, *finder_, spec.ref, int(i), spec.syncFrames));
+        }
+#endif
         else
-            inputs_.push_back(
-                std::make_unique<NdiReceiver>(vk_, q, *finder_, spec.ref, int(i)));
+            inputs_.push_back(std::make_unique<NdiReceiver>(
+                vk_, q, *finder_, spec.ref, int(i), spec.syncFrames));
     }
     if (cfg_.ndiOut)
         ndiOut_ = std::make_unique<NdiOutput>(cfg_.ndiOutName, *comp_, readbackTL_);
@@ -104,8 +145,11 @@ bool Engine::start(const EngineConfig& cfg) {
         audio_ = std::make_unique<audio::AudioEngine>(int(inputs_.size()));
         audio_->masterDelayMs.store(
             std::clamp(cfg_.masterAudioDelayMs, 0, audio::kMaxMasterDelayMs));
-        for (size_t i = 0; i < inputs_.size(); ++i)
+        for (size_t i = 0; i < inputs_.size(); ++i) {
             inputs_[i]->attachAudioSink(&audio_->channel(int(i)));
+            audio_->channel(int(i)).syncManaged.store(
+                cfg_.inputs[i].syncFrames >= 0, std::memory_order_relaxed);
+        }
         if (ndiOut_)
             audio_->addSink(
                 [out = ndiOut_.get()](const float* lr, int frames, int64_t s0) {
@@ -305,6 +349,44 @@ void Engine::renderLoop(std::stop_token st) {
             &Stats::counter("in" + std::to_string(i) + ".lateFallbacks");
     }
 
+    // Frame-sync state (docs/design-framesync.md): one scheduler per
+    // sync-enabled input, render-thread-owned, rebuilt on cadence change.
+    // Stats counters are cumulative across rebuilds/replaces via the base.
+    using EngineSync = FrameSync<IInputSource::FramePtr>;
+    std::vector<std::unique_ptr<EngineSync>> sync(static_cast<size_t>(N));
+    std::vector<EngineSync::Counters> syncBase(static_cast<size_t>(N));
+    std::vector<int> syncFramesCfg(static_cast<size_t>(N), -1);
+    struct SyncCtrs {
+        Stats::Counter *starves, *waits, *lateUploads, *slipDrops, *overflows,
+            *resyncs, *depth, *delayUs, *trimUs, *trimClamped;
+    };
+    std::vector<SyncCtrs> syncCtr(static_cast<size_t>(N));
+    for (int i = 0; i < N; ++i) {
+        syncFramesCfg[size_t(i)] = cfg_.inputs[size_t(i)].syncFrames;
+        const std::string p = "in" + std::to_string(i) + ".sync.";
+        syncCtr[size_t(i)] = {
+            &Stats::counter(p + "starves"),   &Stats::counter(p + "waits"),
+            &Stats::counter(p + "lateUploads"), &Stats::counter(p + "slipDrops"),
+            &Stats::counter(p + "overflows"), &Stats::counter(p + "resyncs"),
+            &Stats::counter(p + "depth"),     &Stats::counter(p + "videoDelayUs"),
+            &Stats::counter(p + "autoTrimUs"),
+            &Stats::counter(p + "trimClamped")};
+    }
+    // Path-tail asymmetry between the video measurement point (composite
+    // tick) and the audio one (mixer ring pull): mixer chunk quantization
+    // and sink fan-out. Calibrated with flash+tone against the TS-capture
+    // ground truth: N=1 NDI-in draws centered -5.5 ms vs the v1 SRT-path
+    // center of -3.8 ms (docs/bench-framesync.md).
+    constexpr int64_t kSyncTrimBiasNs = 1'700'000;
+    auto foldSyncBase = [](EngineSync::Counters& b, const EngineSync::Counters& c) {
+        b.starves += c.starves;
+        b.waits += c.waits;
+        b.lateUploads += c.lateUploads;
+        b.slipDrops += c.slipDrops;
+        b.overflows += c.overflows;
+        b.resyncs += c.resyncs;
+    };
+
     uint32_t lastTallyKey = 0xFFFFFFFF;
 
     // The clock was started in start() (audio shares the origin); the first
@@ -353,16 +435,36 @@ void Engine::renderLoop(std::stop_token st) {
                 auto old = std::move(inputs_[size_t(idx)]);
                 auto& q = (idx % 2) ? vk_.xferDown() : vk_.xferUp();
                 if (spec.type == InputSpec::Type::Srt)
-                    inputs_[size_t(idx)] =
-                        std::make_unique<SrtInput>(vk_, q, cuda_, spec.ref, idx);
+                    inputs_[size_t(idx)] = std::make_unique<SrtInput>(
+                        vk_, q, cuda_, spec.ref, idx, spec.syncFrames);
+#ifdef MOO_HAVE_OMT
+                else if (spec.type == InputSpec::Type::Omt)
+                    inputs_[size_t(idx)] = std::make_unique<OmtInput>(
+                        vk_, q, spec.ref, idx, spec.syncFrames);
+#endif
                 else
                     inputs_[size_t(idx)] = std::make_unique<NdiReceiver>(
-                        vk_, q, *finder_, spec.ref, idx);
-                if (audio_)
+                        vk_, q, *finder_, spec.ref, idx, spec.syncFrames);
+                if (audio_) {
                     inputs_[size_t(idx)]->attachAudioSink(&audio_->channel(idx));
+                    // New source: drop the auto trim now (the lane restarts
+                    // silent, no need to slew away from the old source's).
+                    audio_->channel(idx).autoDelayFrames.store(
+                        0, std::memory_order_relaxed);
+                    audio_->channel(idx).syncManaged.store(
+                        spec.syncFrames >= 0, std::memory_order_relaxed);
+                    audio_->channel(idx).autoDelayGen.fetch_add(
+                        1, std::memory_order_relaxed);
+                }
                 cur[size_t(idx)].reset();  // placeholder until first frame
                 seq[size_t(idx)] = 0;
                 lastNewTick[size_t(idx)] = n - staleTicks - 1;
+                if (sync[size_t(idx)]) {
+                    foldSyncBase(syncBase[size_t(idx)],
+                                 sync[size_t(idx)]->counters());
+                    sync[size_t(idx)].reset();
+                }
+                syncFramesCfg[size_t(idx)] = spec.syncFrames;
                 {
                     std::lock_guard lk(replaceM_);
                     cfg_.inputs[size_t(idx)] = spec;
@@ -411,28 +513,93 @@ void Engine::renderLoop(std::stop_token st) {
             lastTallyKey = tallyKey;
         }
 
-        // -- refresh inputs: newest COMPLETED upload (latest-frame policy;
-        //    falls back up to two publishes while the newest DMA is in flight) --
+        // -- refresh inputs. Sync-off (v1 policy): newest COMPLETED upload
+        //    from the mailbox, falling back up to two publishes while the
+        //    newest DMA is in flight. Sync-on: drain the timestamped feed
+        //    into the scheduler and present whatever is due at this tick. --
         for (int i = 0; i < N; ++i) {
-            IInputSource::Mailbox::Item cand[IInputSource::Mailbox::kKeep];
-            const int nc = inputs_[size_t(i)]->newerCandidates(seq[size_t(i)], cand);
-            const IInputSource::Mailbox::Item* take = nullptr;
-            for (int k = 0; k < nc; ++k) {
-                if (cand[k].value && (*cand[k].value).uploaded()) {
-                    take = &cand[k];
-                    if (k > 0) lateCtr[size_t(i)]->add();
-                    break;
+            if (auto* feed = inputs_[size_t(i)]->syncFeed()) {
+                IInputSource::TimedFrame tf;
+                while (feed->pop(tf)) {
+                    const auto& fd = tf.frame->desc;
+                    const int64_t ts = 1'000'000'000LL * fd.fpsD / fd.fpsN;
+                    auto& fs = sync[size_t(i)];
+                    if (!fs || fs->config().framePeriodNs != ts) {
+                        if (fs) foldSyncBase(syncBase[size_t(i)], fs->counters());
+                        fs = std::make_unique<EngineSync>(EngineSync::Config{
+                            ts, std::max(0, syncFramesCfg[size_t(i)])});
+                    }
+                    fs->push(std::move(tf.frame), tf.seq, tf.srcPtsNs, tf.arrNs,
+                             tf.senderClock);
                 }
-            }
-            if (take) {
-                if (seq[size_t(i)] && take->seq > seq[size_t(i)] + 1)
-                    burstCtr[size_t(i)]->add(
-                        int64_t(take->seq - seq[size_t(i)] - 1));
-                cur[size_t(i)] = take->value;
-                seq[size_t(i)] = take->seq;
-                lastNewTick[size_t(i)] = n;
-            } else if (cur[size_t(i)]) {
-                repeatCtr[size_t(i)]->add();
+                if (auto& fs = sync[size_t(i)]) {
+                    auto f = fs->present(
+                        clock_.nsForTick(n),
+                        [](const IInputSource::FramePtr& p) {
+                            return p && p->uploaded();
+                        });
+                    if (f) {
+                        cur[size_t(i)] = std::move(*f);
+                        lastNewTick[size_t(i)] = n;
+                    } else if (cur[size_t(i)]) {
+                        repeatCtr[size_t(i)]->add();
+                    }
+                    const auto& b = syncBase[size_t(i)];
+                    const auto& c = fs->counters();
+                    const auto& sc = syncCtr[size_t(i)];
+                    sc.starves->set(b.starves + c.starves);
+                    sc.waits->set(b.waits + c.waits);
+                    sc.lateUploads->set(b.lateUploads + c.lateUploads);
+                    sc.slipDrops->set(b.slipDrops + c.slipDrops);
+                    sc.overflows->set(b.overflows + c.overflows);
+                    sc.resyncs->set(b.resyncs + c.resyncs);
+                    sc.depth->set(fs->depth());
+                    sc.delayUs->set(fs->locked() ? fs->videoDelayNs() / 1000
+                                                 : 0);
+                    // Auto A/V trim: mirror the realized video re-timing
+                    // into the input's audio lane (shared-pts domains only).
+                    if (audio_ && fs->locked() && fs->senderClock()) {
+                        auto& ch = audio_->channel(i);
+                        const int64_t apm =
+                            ch.playoutMinusPtsNs(clock_.nsForTick(n));
+                        if (apm != audio::InputChannel::kNoPts) {
+                            const int64_t raw =
+                                fs->presentMinusPtsNs() - apm + kSyncTrimBiasNs;
+                            // Negative = audio already later than the video:
+                            // undelayable; needs syncFrames headroom instead.
+                            if (raw < 0) sc.trimClamped->set(-raw / 1000);
+                            const int64_t trimNs =
+                                std::clamp(raw, int64_t(0), int64_t(500'000'000));
+                            const int tf =
+                                int(trimNs * audio::kSampleRate / 1'000'000'000);
+                            ch.autoDelayFrames.store(tf,
+                                                     std::memory_order_relaxed);
+                            sc.trimUs->set(trimNs / 1000);
+                        }
+                    }
+                }
+            } else {
+                IInputSource::Mailbox::Item cand[IInputSource::Mailbox::kKeep];
+                const int nc =
+                    inputs_[size_t(i)]->newerCandidates(seq[size_t(i)], cand);
+                const IInputSource::Mailbox::Item* take = nullptr;
+                for (int k = 0; k < nc; ++k) {
+                    if (cand[k].value && (*cand[k].value).uploaded()) {
+                        take = &cand[k];
+                        if (k > 0) lateCtr[size_t(i)]->add();
+                        break;
+                    }
+                }
+                if (take) {
+                    if (seq[size_t(i)] && take->seq > seq[size_t(i)] + 1)
+                        burstCtr[size_t(i)]->add(
+                            int64_t(take->seq - seq[size_t(i)] - 1));
+                    cur[size_t(i)] = take->value;
+                    seq[size_t(i)] = take->seq;
+                    lastNewTick[size_t(i)] = n;
+                } else if (cur[size_t(i)]) {
+                    repeatCtr[size_t(i)]->add();
+                }
             }
             if (cur[size_t(i)] && n - lastNewTick[size_t(i)] > staleTicks)
                 cur[size_t(i)].reset();  // no signal -> placeholder

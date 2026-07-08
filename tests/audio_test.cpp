@@ -276,6 +276,30 @@ TEST_CASE("input channel: planar push interleaves, guards rate, counts drops") {
     REQUIRE(ch.pushedFrames.load() == 150);
 }
 
+TEST_CASE("input channel: sync-managed lane drops connect backlog at hold release") {
+    // A connect can land the transport's whole buffered backlog in the ring
+    // in one push (SRT latency window). Sync-managed lanes must start playing
+    // from exactly prefill or the parked excess becomes a per-session A/V
+    // offset the auto trim cannot remove (negative demand clamps at 0).
+    AudioEngine eng(2);
+    eng.channel(0).syncManaged.store(true);   // sync lane: trims
+    eng.channel(1).syncManaged.store(false);  // v1 lane: keeps backlog (G4)
+
+    constexpr int kBacklog = 4000;  // > prefill 960, < the 4800 latency guard
+    std::vector<float> lr(size_t(kBacklog) * kChannels, 0.1f);
+    eng.channel(0).pushInterleaved(lr.data(), kBacklog, kSampleRate);
+    eng.channel(1).pushInterleaved(lr.data(), kBacklog, kSampleRate);
+
+    eng.publishMix(0, 1, 0.f, 0.f);
+    eng.start(moo::MediaClock::nowNs());
+    while (eng.mixTicks() < 4) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    eng.stop();
+
+    REQUIRE(eng.channel(0).trimmedFrames.load() == kBacklog - kPrefillFrames);
+    REQUIRE(eng.channel(1).trimmedFrames.load() == 0);
+    REQUIRE(eng.channel(0).ringFillSamples() < eng.channel(1).ringFillSamples());
+}
+
 TEST_CASE("audio engine: sinks receive contiguous sample counters") {
     AudioEngine eng(1);
     std::vector<int64_t> firsts;

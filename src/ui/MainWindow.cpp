@@ -180,11 +180,11 @@ ShowFile::State MainWindow::collectState() const {
     ShowFile::State st = baseState_;
     st.cfg.inputs.clear();
     for (int i = 0; i < bridge_.inputCount(); ++i) {
-        const std::string ref = bridge_.inputRef(i).toStdString();
-        st.cfg.inputs.push_back({ref.rfind("srt://", 0) == 0
-                                     ? InputSpec::Type::Srt
-                                     : InputSpec::Type::Ndi,
-                                 ref});
+        // The engine knows each input's true type; re-deriving it from the
+        // ref would misfile OMT discovery names (no scheme) as NDI.
+        st.cfg.inputs.push_back({InputSpec::Type(bridge_.inputType(i)),
+                                 bridge_.inputRef(i).toStdString(),
+                                 bridge_.inputSyncFrames(i)});
     }
     st.program = lastProgram_ < 0 ? 0 : lastProgram_;
     st.preview = lastPreview_ < 0 ? 1 : lastPreview_;
@@ -216,6 +216,8 @@ void MainWindow::onInputNames(const QStringList& refs) {
         QString n = refs[i];
         if (n.startsWith(QStringLiteral("srt://")))
             n = QStringLiteral("SRT ") + n.mid(6);
+        else if (n.startsWith(QStringLiteral("omt://")))
+            n = QStringLiteral("OMT ") + n.mid(6);
         const QString text = QStringLiteral("%1\n%2").arg(i + 1).arg(n.left(14));
         if (i < int(pgmBtns_.size())) pgmBtns_[size_t(i)]->setText(text);
         if (i < int(pvwBtns_.size())) pvwBtns_[size_t(i)]->setText(text);

@@ -4,6 +4,7 @@
 
 #include "audio/AudioEngine.h"
 #include "core/Log.h"
+#include "core/MediaClock.h"
 #include "core/Stats.h"
 
 extern "C" {
@@ -13,9 +14,10 @@ extern "C" {
 namespace moo {
 
 SrtInput::SrtInput(gpu::VkEngine& eng, gpu::Queue& uploadQueue,
-                   media::CudaCtx& cuda, std::string url, int index)
+                   media::CudaCtx& cuda, std::string url, int index,
+                   int syncFrames)
     : eng_(eng), queue_(uploadQueue), cuda_(cuda), url_(std::move(url)),
-      index_(index) {
+      index_(index), syncFrames_(syncFrames) {
     static std::once_flag netInit;
     std::call_once(netInit, [] { avformat_network_init(); });
 
@@ -61,6 +63,8 @@ AVPixelFormat SrtInput::pickCuda(AVCodecContext*, const AVPixelFormat* fmts) {
 }
 
 bool SrtInput::openStream() {
+    ptsSynth_ = false;  // re-judge the new stream's timestamps
+    synthK_ = 0;
     ic_ = avformat_alloc_context();
     ic_->interrupt_callback = {&SrtInput::interruptCb, this};
     if (avformat_open_input(&ic_, url_.c_str(), nullptr, nullptr) < 0) return false;
@@ -144,7 +148,17 @@ void SrtInput::handleAudioFrame(AVFrame* f) {
         swr_convert(swr_, &outPtr, outCap,
                     const_cast<const uint8_t**>(f->extended_data),
                     f->nb_samples);
-    if (got > 0) ch->pushInterleaved(aconv_.data(), got, audio::kSampleRate);
+    if (got > 0) {
+        // Same TS clock as the video pts; swr's sub-chunk latency is a
+        // constant that folds into the trim bias.
+        const int64_t bet = f->best_effort_timestamp;
+        const int64_t pts =
+            bet != AV_NOPTS_VALUE
+                ? av_rescale_q(bet, ic_->streams[audIdx_]->time_base,
+                               AVRational{1, 1'000'000'000})
+                : audio::InputChannel::kNoPts;
+        ch->pushInterleaved(aconv_.data(), got, audio::kSampleRate, pts);
+    }
 }
 
 void SrtInput::handleFrame(AVFrame* f) {
@@ -166,8 +180,11 @@ void SrtInput::handleFrame(AVFrame* f) {
 
     if (!ring_ || !(ring_->desc() == d)) {
         for (auto& im : imports_) cuda_.release(im);
-        ring_ = std::make_shared<gpu::Nv12Ring>(eng_, d, queue_);
-        for (int s = 0; s < gpu::Nv12Ring::kSlots; ++s) {
+        const int slots = gpu::Nv12Ring::kSlots +
+                          (syncFrames_ >= 0 ? syncFrames_ + 2 : 0);
+        ring_ = std::make_shared<gpu::Nv12Ring>(eng_, d, queue_, slots);
+        imports_.assign(size_t(slots), media::CudaCtx::Imported{});
+        for (int s = 0; s < slots; ++s) {
             const int fd = ring_->exportStagingFd(s);
             if (fd < 0 || !cuda_.importVkFd(fd, ring_->stagingBytes(), imports_[s])) {
                 MOO_LOGE("in%d(srt): staging import failed", index_);
@@ -207,7 +224,39 @@ void SrtInput::handleFrame(AVFrame* f) {
     if (cuStreamSynchronize(cuda_.stream()) != CUDA_SUCCESS) return;
 
     const uint64_t v = ring_->submit(slot);
-    mailbox_.publish(std::make_shared<const gpu::GpuFrame>(ring_, slot, v));
+    auto frame = std::make_shared<const gpu::GpuFrame>(ring_, slot, v);
+    mailbox_.publish(frame);
+    if (syncFrames_ >= 0) {
+        const int64_t arrNs = MediaClock::nowNs();
+        const int64_t tsNs = 1'000'000'000LL * d.fpsD / d.fpsN;
+        const int64_t bet = f->best_effort_timestamp;
+        int64_t ptsNs;
+        if (!ptsSynth_ && bet == AV_NOPTS_VALUE) {
+            ptsSynth_ = true;
+            Stats::counter("in" + std::to_string(index_) + ".sync.ptsSynth")
+                .add();
+        }
+        if (ptsSynth_) {
+            // Arrival-anchored grid; re-base across gaps so the scheduler
+            // sees them as pts discontinuities (resync). Poorer than real
+            // pts for SRT (decoder emission is bursty), fallback only.
+            if (synthK_ == 0 || arrNs - synthLastArrNs_ > 500'000'000LL) {
+                synthBaseNs_ = arrNs;
+                synthK_ = 0;
+            }
+            ptsNs = synthBaseNs_ + synthK_ * tsNs;
+            ++synthK_;
+            synthLastArrNs_ = arrNs;
+        } else {
+            // TS 90 kHz pts carry the sender's clean cadence even when the
+            // decoder emits in clumps -- exactly what the scheduler wants.
+            ptsNs = av_rescale_q(bet, ic_->streams[vidIdx_]->time_base,
+                                 AVRational{1, 1'000'000'000});
+        }
+        if (!feed_.push({frame, ++pubSeq_, ptsNs, arrNs, !ptsSynth_}))
+            Stats::counter("in" + std::to_string(index_) + ".sync.feedDrops")
+                .add();
+    }
     frames_.fetch_add(1, std::memory_order_relaxed);
     frameCtr.add();
 }

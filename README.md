@@ -4,11 +4,15 @@ A live video switcher for Linux + NVIDIA: NDI inputs, program/preview switching 
 transitions, NDI and SRT (HEVC/NVENC) program outputs, full audio mixer, Qt 6 GUI with
 Vulkan multiview. Built for low latency at up to 8K 59.94p.
 
-Status: **v1 complete (M0–M6)**. 8K-hardened engine (30-min soak: zero tick overruns,
-1.5-frame latency, <2 cores full pipeline, NVENC 54%), full audio mixer (A/V within ±8 ms
-on NDI and SRT paths at 1080p and 8K), live source picker (swap NDI/SRT sources per input
-mid-show), show-file persistence (restart restores everything), health banners, runtime
-counters in the GUI. Bench record: `docs/bench-m5.md`; tuning: `docs/tuning.md`.
+Status: **v1 complete (M0–M6), v2 frame sync landed**. 8K-hardened engine (30-min soak: zero
+tick overruns, 1.5-frame latency, <2 cores full pipeline, NVENC 54%), full audio mixer (A/V
+within ±8 ms on NDI and SRT paths at 1080p and 8K), live source picker (swap NDI/SRT sources
+per input mid-show), show-file persistence (restart restores everything), health banners,
+runtime counters in the GUI. Per-input **frame sync**: re-times a source onto the output tick
+grid (1–4 frame buffer absorbs bursty delivery, rate slip becomes counted repeats/drops) and
+auto-aligns the input's audio to the re-timed video — the cross-session A/V phase lottery
+collapses to a constant (design + measurements: `docs/design-framesync.md`,
+`docs/bench-framesync.md`). Bench record: `docs/bench-m5.md`; tuning: `docs/tuning.md`.
 SpeedHQ measured (plan risk #1 closed): same-host NDI is compressed too; 8K NDI ingest is
 not viable (use SRT/HEVC — NVDEC), NDI is comfortable through 4K; see `docs/bench-m5.md`. Milestones: M6 (v1 close), M5 (8K hardening), M4 (audio),
 M3+M3.5 (SRT/HEVC both directions), M2 (switching/multiview), M1 (Vulkan engine), M0 (bench).
@@ -32,8 +36,14 @@ Run it:
 
 The show (inputs, outputs, transition, program/preview, full mixer state) persists to
 `~/.config/MooSwitcher/show.ini` (or `--show-file PATH`) and restores on restart; CLI flags
-override what they name. Click an input's name in the mixer to pick a different NDI source
-or an `srt://` URL live. Shortcuts: `Space` cut, `Enter` auto, `F` FTB, `1–9` program,
+override what they name. Click an input's name in the mixer to pick a different source live —
+the browser lists NDI and OMT discovery together (Open Media Transport ingest is optional,
+8K-capable for realistic content: build steps `docs/omt.md`, measurements `docs/bench-omt.md`;
+headless `--omt-input`), and the manual field takes an `srt://` or `omt://` URL or an NDI
+name substring. The same dialog sets the input's frame sync (Off / Trim only /
+1–4 frames; headless: `--framesync IDX[:FRAMES]`). Use 1 frame for free-running cameras
+you switch between often (constant A/V at +1 frame latency); Trim only suits audio-early
+sources like SRT loopbacks. Shortcuts: `Space` cut, `Enter` auto, `F` FTB, `1–9` program,
 `Shift+1–9` preview.
 
 ## Build

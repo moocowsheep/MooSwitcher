@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <memory>
 
 #include "core/Format.h"
 #include "gpu/VkEngine.h"
@@ -14,10 +15,13 @@ namespace moo::gpu {
 class Nv12Ring {
 public:
     // One extra over the pre-M5 four: the input mailbox retains the previous
-    // publish for the late-upload fallback (see LatestMailbox).
+    // publish for the late-upload fallback (see LatestMailbox). Frame-sync
+    // inputs pass a larger count: queued frames pin their slots until
+    // presented (docs/design-framesync.md).
     static constexpr int kSlots = 5;
 
-    Nv12Ring(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQueue);
+    Nv12Ring(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQueue,
+             int slots = kSlots);
     ~Nv12Ring();
     Nv12Ring(const Nv12Ring&) = delete;
     Nv12Ring& operator=(const Nv12Ring&) = delete;
@@ -40,6 +44,7 @@ public:
 
     void addRenderRef(int slot) { slots_[slot].renderRefs.fetch_add(1); }
     void releaseRenderRef(int slot) { slots_[slot].renderRefs.fetch_sub(1); }
+    int slotCount() const { return nSlots_; }
 
 private:
     struct Slot {
@@ -56,7 +61,8 @@ private:
     Queue& queue_;
     VkCommandPool pool_ = VK_NULL_HANDLE;
     Timeline tl_;
-    Slot slots_[kSlots];
+    std::unique_ptr<Slot[]> slots_;  // atomics: sized once, never moved
+    int nSlots_;
     int cursor_ = 0;
 };
 

@@ -11,7 +11,8 @@ bool ShowFile::State::cfgEquals(const EngineConfig& a, const EngineConfig& b) {
     if (a.inputs.size() != b.inputs.size()) return false;
     for (size_t i = 0; i < a.inputs.size(); ++i)
         if (a.inputs[i].type != b.inputs[i].type ||
-            a.inputs[i].ref != b.inputs[i].ref)
+            a.inputs[i].ref != b.inputs[i].ref ||
+            a.inputs[i].syncFrames != b.inputs[i].syncFrames)
             return false;
     return a.show == b.show && a.ndiOut == b.ndiOut &&
            a.ndiOutName == b.ndiOutName && a.srtUrl == b.srtUrl &&
@@ -56,10 +57,14 @@ bool ShowFile::load(State& st) const {
     for (int i = 0; i < n; ++i) {
         s.setArrayIndex(i);
         InputSpec spec;
-        spec.type = s.value("type").toString() == QStringLiteral("srt")
-                        ? InputSpec::Type::Srt
-                        : InputSpec::Type::Ndi;
+        const QString type = s.value("type").toString();
+        spec.type = type == QStringLiteral("srt")   ? InputSpec::Type::Srt
+                    : type == QStringLiteral("omt") ? InputSpec::Type::Omt
+                                                    : InputSpec::Type::Ndi;
         spec.ref = s.value("ref").toString().toStdString();
+        // Absent in v1 show files -> stays off (-1).
+        spec.syncFrames = s.value("framesync", spec.syncFrames).toInt();
+        if (spec.syncFrames < -1 || spec.syncFrames > 4) spec.syncFrames = -1;
         st.cfg.inputs.push_back(std::move(spec));
     }
     s.endArray();
@@ -103,10 +108,11 @@ void ShowFile::save(const State& st) const {
     for (int i = 0; i < int(st.cfg.inputs.size()); ++i) {
         s.setArrayIndex(i);
         const auto& spec = st.cfg.inputs[size_t(i)];
-        s.setValue("type", spec.type == InputSpec::Type::Srt
-                               ? QStringLiteral("srt")
-                               : QStringLiteral("ndi"));
+        s.setValue("type", spec.type == InputSpec::Type::Srt   ? QStringLiteral("srt")
+                           : spec.type == InputSpec::Type::Omt ? QStringLiteral("omt")
+                                                               : QStringLiteral("ndi"));
         s.setValue("ref", QString::fromStdString(spec.ref));
+        s.setValue("framesync", spec.syncFrames);
     }
     s.endArray();
 

@@ -20,13 +20,15 @@ std::string lower(std::string s) {
 }  // namespace
 
 NdiReceiver::NdiReceiver(gpu::VkEngine& eng, gpu::Queue& uploadQueue,
-                         NdiFinder& finder, std::string matchName, int index)
+                         NdiFinder& finder, std::string matchName, int index,
+                         int syncFrames)
     : eng_(eng),
       queue_(uploadQueue),
       finder_(finder),
       match_(lower(matchName)),
       displayName_(std::move(matchName)),
-      index_(index) {
+      index_(index),
+      syncFrames_(syncFrames) {
     NDIlib_recv_create_v3_t desc{};
     desc.color_format = NDIlib_recv_color_format_fastest;  // UYVY (UYVA w/ alpha)
     desc.bandwidth = NDIlib_recv_bandwidth_highest;
@@ -60,9 +62,24 @@ void NdiReceiver::run(std::stop_token st) {
     auto& dropCtr = Stats::counter("in" + std::to_string(index_) + ".drops");
     auto& frameCtr = Stats::counter("in" + std::to_string(index_) + ".frames");
     auto& reconnCtr = Stats::counter("in" + std::to_string(index_) + ".reconnects");
+    auto& synthCtr =
+        Stats::counter("in" + std::to_string(index_) + ".sync.ptsSynth");
+    auto& feedDropCtr =
+        Stats::counter("in" + std::to_string(index_) + ".sync.feedDrops");
 
     int64_t lastVideoNs = 0;
     bool everConnected = false;
+
+    // Frame-sync pts state. Sender timestamps are the pts source of truth
+    // (deltas only -- they ride the sender's NTP-slewed realtime clock);
+    // senders that ship absent/garbage timestamps get a synthesized
+    // arrival-anchored grid instead, sticky until reconnect.
+    uint64_t pubSeq = 0;
+    bool ptsSynth = false;
+    int badCadence = 0;
+    bool haveSrcTs = false;
+    int64_t lastSrcTsNs = 0;
+    int64_t synthBaseNs = 0, synthK = 0, synthLastArrNs = 0;
 
     while (!st.stop_requested()) {
         if (!connected_.load(std::memory_order_relaxed)) {
@@ -80,6 +97,10 @@ void NdiReceiver::run(std::stop_token st) {
             if (everConnected) reconnCtr.add();
             everConnected = true;
             appliedTally_ = 0xFF;  // force tally re-send on the new connection
+            ptsSynth = false;      // re-judge the new connection's timestamps
+            badCadence = 0;
+            haveSrcTs = false;
+            synthK = 0;
             MOO_LOGI("in%d: connecting to '%s'", index_, src->name.c_str());
         }
 
@@ -103,7 +124,16 @@ void NdiReceiver::run(std::stop_token st) {
                     ? reinterpret_cast<const float*>(a.p_data +
                                                      a.channel_stride_in_bytes)
                     : l;  // mono: duplicate the plane
-            ch->pushPlanar(l, r, a.no_samples, a.sample_rate);
+            // Audio timestamps ride the same sender clock as video's -- the
+            // frame-sync auto-trim compares the two (kNoPts disables it).
+            // Treated as first-sample time: measured against the TS-capture
+            // ground truth (docs/bench-framesync.md), trims land ~1.7 ms of
+            // center with this reading -- do NOT "correct" by chunk length
+            // (tried; it overshoots by a full chunk).
+            const int64_t pts = a.timestamp != NDIlib_recv_timestamp_undefined
+                                    ? a.timestamp * 100
+                                    : audio::InputChannel::kNoPts;
+            ch->pushPlanar(l, r, a.no_samples, a.sample_rate, pts);
         };
 
         NDIlib_video_frame_v2_t vf{};
@@ -143,7 +173,10 @@ void NdiReceiver::run(std::stop_token st) {
             if (!ring_ || !(ring_->desc() == d)) {
                 MOO_LOGI("in%d: format %dx%d @ %d/%d", index_, d.width, d.height,
                          vf.frame_rate_N, vf.frame_rate_D);
-                ring_ = std::make_shared<gpu::UploadRing>(eng_, d, queue_);
+                const int slots =
+                    gpu::UploadRing::kSlots +
+                    (syncFrames_ >= 0 ? syncFrames_ + 2 : 0);
+                ring_ = std::make_shared<gpu::UploadRing>(eng_, d, queue_, slots);
                 std::lock_guard lk(descM_);
                 desc_ = d;
             }
@@ -167,9 +200,57 @@ void NdiReceiver::run(std::stop_token st) {
                            src + size_t(y) * vf.line_stride_in_bytes, dstStride);
             }
             const uint64_t value = ring_->submit(slot);
+            const int64_t senderTsNs =
+                vf.timestamp != NDIlib_recv_timestamp_undefined
+                    ? vf.timestamp * 100
+                    : NDIlib_recv_timestamp_undefined;
             NDIlib_recv_free_video_v2(recv_, &vf);
 
-            mailbox_.publish(std::make_shared<const gpu::GpuFrame>(ring_, slot, value));
+            auto frame = std::make_shared<const gpu::GpuFrame>(ring_, slot, value);
+            mailbox_.publish(frame);
+            if (syncFrames_ >= 0) {
+                const int64_t arrNs = lastVideoNs;  // capture-return time
+                const int64_t tsNs = 1'000'000'000LL * d.fpsD / d.fpsN;
+                if (!ptsSynth) {
+                    if (senderTsNs == NDIlib_recv_timestamp_undefined) {
+                        ptsSynth = true;
+                        synthCtr.add();
+                    } else {
+                        if (haveSrcTs) {
+                            const int64_t dts = senderTsNs - lastSrcTsNs;
+                            const int64_t err = dts > tsNs ? dts - tsNs : tsNs - dts;
+                            if (dts <= 0 || err > tsNs / 4) {
+                                if (++badCadence > 8) {
+                                    ptsSynth = true;
+                                    synthCtr.add();
+                                    MOO_LOGW("in%d: sender timestamps unusable, "
+                                             "synthesizing pts", index_);
+                                }
+                            } else {
+                                badCadence = 0;
+                            }
+                        }
+                        lastSrcTsNs = senderTsNs;
+                        haveSrcTs = true;
+                    }
+                }
+                int64_t ptsNs;
+                if (ptsSynth) {
+                    // Arrival-anchored grid; re-base across gaps so the
+                    // scheduler sees them as pts discontinuities (resync).
+                    if (synthK == 0 || arrNs - synthLastArrNs > 500'000'000LL) {
+                        synthBaseNs = arrNs;
+                        synthK = 0;
+                    }
+                    ptsNs = synthBaseNs + synthK * tsNs;
+                    ++synthK;
+                    synthLastArrNs = arrNs;
+                } else {
+                    ptsNs = senderTsNs;
+                }
+                if (!feed_.push({frame, ++pubSeq, ptsNs, arrNs, !ptsSynth}))
+                    feedDropCtr.add();
+            }
             frames_.fetch_add(1, std::memory_order_relaxed);
             frameCtr.add();
         } else if (ft == NDIlib_frame_type_audio) {

@@ -26,8 +26,10 @@ namespace moo {
 // backoff; same latest-frame mailbox contract as the NDI receiver.
 class SrtInput : public IInputSource {
 public:
+    // syncFrames >= 0 enables the frame-sync feed (and sizes the NV12 ring
+    // for that many queued frames); -1 = plain latest-frame input.
     SrtInput(gpu::VkEngine& eng, gpu::Queue& uploadQueue, media::CudaCtx& cuda,
-             std::string url, int index);
+             std::string url, int index, int syncFrames = -1);
     ~SrtInput() override;
 
     std::optional<Mailbox::Item> newer(uint64_t lastSeq) const override {
@@ -41,6 +43,8 @@ public:
     void attachAudioSink(audio::InputChannel* ch) override {
         audioSink_.store(ch, std::memory_order_release);
     }
+
+    SyncFeed* syncFeed() override { return syncFrames_ >= 0 ? &feed_ : nullptr; }
 
 private:
     void run(std::stop_token st);
@@ -71,9 +75,14 @@ private:
     std::vector<float> aconv_;  // decode-thread scratch
 
     std::shared_ptr<gpu::Nv12Ring> ring_;
-    media::CudaCtx::Imported imports_[gpu::Nv12Ring::kSlots]{};
+    std::vector<media::CudaCtx::Imported> imports_;  // one per ring slot
 
     Mailbox mailbox_;
+    const int syncFrames_;
+    SyncFeed feed_{16};
+    uint64_t pubSeq_ = 0;    // decode thread
+    bool ptsSynth_ = false;  // decode thread; sticky per stream
+    int64_t synthBaseNs_ = 0, synthK_ = 0, synthLastArrNs_ = 0;
     std::atomic<audio::InputChannel*> audioSink_{nullptr};
     std::atomic<bool> connected_{false};
     std::atomic<bool> stopFlag_{false};

@@ -1,5 +1,6 @@
 #include "ui/MixerPanel.h"
 
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
@@ -19,9 +20,13 @@ namespace moo::ui {
 
 namespace {
 
-// Pick an NDI source from discovery or type an SRT URL / NDI name substring.
+// Pick an NDI/OMT source from discovery or type an NDI name substring /
+// srt:// / omt:// URL. Discovery rows carry their type in item data --
+// OMT names have no scheme, so text alone cannot distinguish them.
 class SourcePickerDialog : public QDialog {
 public:
+    enum { kTypeRole = Qt::UserRole, kNameRole = Qt::UserRole + 1 };
+
     SourcePickerDialog(EngineBridge& bridge, int input, QWidget* parent)
         : QDialog(parent), bridge_(bridge) {
         setWindowTitle(QStringLiteral("Input %1 source").arg(input + 1));
@@ -37,11 +42,27 @@ public:
         col->addWidget(refreshBtn);
 
         col->addWidget(new QLabel(
-            QStringLiteral("...or NDI name substring / srt:// URL:")));
+            QStringLiteral("...or NDI name substring / srt:// / omt:// URL:")));
         manual_ = new QLineEdit;
         manual_->setPlaceholderText(
             QStringLiteral("srt://host:9710?mode=caller&latency=120000"));
         col->addWidget(manual_);
+
+        auto* fsRow = new QHBoxLayout;
+        fsRow->addWidget(new QLabel(QStringLiteral("Frame sync:")));
+        sync_ = new QComboBox;
+        sync_->addItems({QStringLiteral("Off"),
+                         QStringLiteral("Trim only (no delay)"),
+                         QStringLiteral("1 frame"), QStringLiteral("2 frames"),
+                         QStringLiteral("3 frames"),
+                         QStringLiteral("4 frames")});
+        sync_->setToolTip(QStringLiteral(
+            "Re-time this input onto the output tick grid and auto-align "
+            "its audio. Trim only fixes A/V phase without adding latency; "
+            "N frames also absorbs bursty delivery."));
+        sync_->setCurrentIndex(bridge.inputSyncFrames(input) + 1);
+        fsRow->addWidget(sync_, 1);
+        col->addLayout(fsRow);
 
         auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok |
                                         QDialogButtonBox::Cancel);
@@ -56,19 +77,40 @@ public:
     QString chosen() const {
         const QString manual = manual_->text().trimmed();
         if (!manual.isEmpty()) return manual;
-        if (auto* item = list_->currentItem()) return item->text();
+        if (auto* item = list_->currentItem())
+            return item->data(kNameRole).toString();
         return {};
     }
+    // -1 = infer from the ref (manual entry); explicit for discovery rows.
+    int chosenType() const {
+        if (!manual_->text().trimmed().isEmpty()) return -1;
+        if (auto* item = list_->currentItem())
+            return item->data(kTypeRole).toInt();
+        return -1;
+    }
+    int syncFrames() const { return sync_->currentIndex() - 1; }
 
 private:
+    void addSource(const QString& name, int type, const char* badge) {
+        auto* item = new QListWidgetItem(
+            QStringLiteral("%1  %2").arg(QLatin1String(badge), name));
+        item->setData(kTypeRole, type);
+        item->setData(kNameRole, name);
+        list_->addItem(item);
+    }
+
     void refresh() {
         list_->clear();
-        list_->addItems(bridge_.ndiSourceNames());
+        for (const QString& n : bridge_.ndiSourceNames())
+            addSource(n, 0, "NDI");  // InputSpec::Type::Ndi
+        for (const QString& n : bridge_.omtSourceNames())
+            addSource(n, 2, "OMT");  // InputSpec::Type::Omt
     }
 
     EngineBridge& bridge_;
     QListWidget* list_ = nullptr;
     QLineEdit* manual_ = nullptr;
+    QComboBox* sync_ = nullptr;
 };
 
 float dbFor(float lin) { return lin > 1e-6f ? 20.f * std::log10(lin) : -120.f; }
@@ -160,8 +202,19 @@ MixerPanel::MixerPanel(EngineBridge& bridge, const QStringList& names,
         nameBtn->setMaximumWidth(110);
         connect(nameBtn, &QPushButton::clicked, this, [this, i] {
             SourcePickerDialog dlg(bridge_, i, this);
-            if (dlg.exec() == QDialog::Accepted && !dlg.chosen().isEmpty())
-                bridge_.replaceInput(i, dlg.chosen());
+            if (dlg.exec() != QDialog::Accepted) return;
+            // No source picked = keep the current one (frame-sync-only
+            // change still goes through the replace path); keeping it must
+            // also keep its TYPE -- an OMT discovery name would otherwise
+            // re-resolve as an NDI substring.
+            const bool keep = dlg.chosen().isEmpty();
+            const QString ref = keep ? bridge_.inputRef(i) : dlg.chosen();
+            if (ref.isEmpty()) return;
+            if (ref == bridge_.inputRef(i) &&
+                dlg.syncFrames() == bridge_.inputSyncFrames(i))
+                return;  // nothing changed
+            bridge_.replaceInput(i, ref, dlg.syncFrames(),
+                                 keep ? bridge_.inputType(i) : dlg.chosenType());
         });
         nameBtns_.push_back(nameBtn);
         col->addWidget(nameBtn, 0, Qt::AlignHCenter);
@@ -212,6 +265,13 @@ MixerPanel::MixerPanel(EngineBridge& bridge, const QStringList& names,
                 [&bridge, i](int ms) { bridge.setAudioDelayMs(i, ms); });
         col->addWidget(delay);
 
+        auto* trim = new QLabel;
+        trim->setStyleSheet(QStringLiteral("color: #888; font-size: 10px;"));
+        trim->setToolTip(QStringLiteral(
+            "Frame-sync auto A/V trim applied on top of the manual delay"));
+        trimLabels_.push_back(trim);
+        col->addWidget(trim, 0, Qt::AlignHCenter);
+
         row->addLayout(col);
     }
 
@@ -239,6 +299,13 @@ void MixerPanel::onLevels(QList<float> lr) {
     for (int i = 0; i < n; ++i)
         meters_[size_t(i)]->setLevels(lr[i * 2], lr[i * 2 + 1]);
     masterMeter_->setLevels(lr[n * 2], lr[n * 2 + 1]);
+    for (int i = 0; i < int(trimLabels_.size()); ++i) {
+        const int ms = bridge_.audioAutoTrimMs(i);
+        const QString t =
+            ms > 0 ? QStringLiteral("auto %1 ms").arg(ms) : QString();
+        if (trimLabels_[size_t(i)]->text() != t)
+            trimLabels_[size_t(i)]->setText(t);
+    }
 }
 
 void MixerPanel::onInputNames(QStringList refs) {

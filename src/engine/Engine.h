@@ -28,8 +28,12 @@ class NdiOutput;
 class SrtOutput;
 
 struct InputSpec {
-    enum class Type { Ndi, Srt } type = Type::Ndi;
-    std::string ref;  // NDI name substring, or srt:// URL
+    enum class Type { Ndi, Srt, Omt } type = Type::Ndi;
+    std::string ref;  // NDI name substring, srt:// URL, or OMT name/omt:// URL
+    // Frame sync (docs/design-framesync.md): -1 = off (v1 latest-frame
+    // behavior), 0 = measure-only (auto A/V trim, no added latency),
+    // 1..4 = buffered re-timing by that many source frames.
+    int syncFrames = -1;
 };
 
 struct EngineConfig {
@@ -68,7 +72,12 @@ public:
     // require Vulkan/CUDA interop (initialized on demand; refused if absent).
     void requestInputReplace(int index, InputSpec spec);
     std::vector<NdiFinder::Source> ndiSources() const;
+    // OMT discovery snapshot (names in "HOST (Name)" form). Empty when built
+    // without OMT. First call may return empty until mDNS answers arrive.
+    std::vector<std::string> omtSources() const;
     std::string inputRef(int i) const;  // current source ref (UI labels)
+    InputSpec::Type inputType(int i) const;
+    int inputSyncFrames(int i) const;   // current frame-sync setting (-1 off)
 
     bool copyMultiview(std::vector<uint8_t>& out, uint64_t& lastSeq, int& w, int& h);
 

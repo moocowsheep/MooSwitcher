@@ -82,6 +82,23 @@ add_library(moo_media STATIC
 target_link_libraries(moo_media PUBLIC moo_gpu CudaDriver PkgConfig::FFMPEG)
 target_compile_options(moo_media PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 
+# -- OMT (Open Media Transport): optional, vendored in third_party/omt.
+# Build once with third_party/{libvmx,libomt} (see docs/omt.md); libomt.so is
+# a NativeAOT build that dlopens libvmx.so from the same directory.
+set(OMT_SDK_DIR ${CMAKE_SOURCE_DIR}/third_party/omt CACHE PATH "OMT SDK root")
+if(EXISTS ${OMT_SDK_DIR}/include/libomt.h AND EXISTS ${OMT_SDK_DIR}/lib/libomt.so)
+  set(OMT_FOUND TRUE)
+  add_library(OMT::omt SHARED IMPORTED)
+  set_target_properties(OMT::omt PROPERTIES
+    IMPORTED_LOCATION ${OMT_SDK_DIR}/lib/libomt.so
+    INTERFACE_INCLUDE_DIRECTORIES ${OMT_SDK_DIR}/include)
+  set(_omt_libdir ${OMT_SDK_DIR}/lib)
+  message(STATUS "OMT SDK found: ${OMT_SDK_DIR}")
+else()
+  set(OMT_FOUND FALSE)
+  message(STATUS "OMT SDK not found (${OMT_SDK_DIR}) - OMT input disabled.")
+endif()
+
 if(NDI_FOUND)
   add_library(moo_ndi STATIC src/ndi/NdiLib.cpp)
   target_link_libraries(moo_ndi PUBLIC moo_core NDI::ndi)
@@ -99,6 +116,14 @@ if(NDI_FOUND)
       BUILD_RPATH ${_ndi_libdir}
       INSTALL_RPATH ${_ndi_libdir})
   endforeach()
+  if(OMT_FOUND)
+    # testgen gains an OMT sender for benching (--omt).
+    target_compile_definitions(moo-testgen PRIVATE MOO_HAVE_OMT)
+    target_link_libraries(moo-testgen PRIVATE OMT::omt)
+    set_target_properties(moo-testgen PROPERTIES
+      BUILD_RPATH "${_ndi_libdir};${_omt_libdir}"
+      INSTALL_RPATH "${_ndi_libdir};${_omt_libdir}")
+  endif()
 
   add_library(moo_engine STATIC
     src/engine/Engine.cpp
@@ -110,12 +135,22 @@ if(NDI_FOUND)
   )
   target_link_libraries(moo_engine PUBLIC moo_gpu moo_ndi moo_media)
   target_compile_options(moo_engine PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+  if(OMT_FOUND)
+    target_sources(moo_engine PRIVATE src/omt/OmtInput.cpp)
+    target_compile_definitions(moo_engine PUBLIC MOO_HAVE_OMT)
+    target_link_libraries(moo_engine PUBLIC OMT::omt)
+  endif()
+
+  set(_moo_rpath ${_ndi_libdir})
+  if(OMT_FOUND)
+    set(_moo_rpath "${_ndi_libdir};${_omt_libdir}")
+  endif()
 
   add_executable(moo-headless tools/moo-headless/main.cpp)
   target_link_libraries(moo-headless PRIVATE moo_engine)
   target_include_directories(moo-headless PRIVATE tools)
   set_target_properties(moo-headless PROPERTIES
-    BUILD_RPATH ${_ndi_libdir} INSTALL_RPATH ${_ndi_libdir})
+    BUILD_RPATH "${_moo_rpath}" INSTALL_RPATH "${_moo_rpath}")
 
   find_package(Qt6 COMPONENTS Widgets QUIET)
   if(Qt6_FOUND)
@@ -134,8 +169,8 @@ if(NDI_FOUND)
     )
     set_target_properties(mooswitcher PROPERTIES
       AUTOMOC ON
-      BUILD_RPATH ${_ndi_libdir}
-      INSTALL_RPATH ${_ndi_libdir})
+      BUILD_RPATH "${_moo_rpath}"
+      INSTALL_RPATH "${_moo_rpath}")
     target_link_libraries(mooswitcher PRIVATE moo_engine Qt6::Widgets)
     target_compile_options(mooswitcher PRIVATE -Wall -Wextra)
   else()
@@ -160,6 +195,7 @@ if(MOO_BUILD_TESTS)
     tests/clock_test.cpp
     tests/ring_test.cpp
     tests/switcher_core_test.cpp
+    tests/framesync_test.cpp
     tests/strip_test.cpp
     tests/audio_test.cpp
     tests/aac_test.cpp

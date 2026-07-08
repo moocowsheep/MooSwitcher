@@ -67,12 +67,22 @@ bool EngineBridge::audioSolo(int input) const {
     return c && c->solo.load(std::memory_order_relaxed);
 }
 
-void EngineBridge::replaceInput(int input, QString ref) {
+void EngineBridge::replaceInput(int input, QString ref, int syncFrames,
+                                int type) {
     const std::string r = ref.toStdString();
-    const bool srt = r.rfind("srt://", 0) == 0;
-    engine_.requestInputReplace(
-        input,
-        {srt ? InputSpec::Type::Srt : InputSpec::Type::Ndi, r});
+    const auto t =
+        type >= 0 && type <= 2 ? InputSpec::Type(type)
+        : r.rfind("srt://", 0) == 0   ? InputSpec::Type::Srt
+        : r.rfind("omt://", 0) == 0   ? InputSpec::Type::Omt
+                                      : InputSpec::Type::Ndi;
+    engine_.requestInputReplace(input, {t, r, syncFrames});
+}
+
+int EngineBridge::audioAutoTrimMs(int input) const {
+    auto* c = chan(engine_, input);
+    return c ? c->autoDelayFrames.load(std::memory_order_relaxed) *
+                   1000 / audio::kSampleRate
+             : 0;
 }
 
 QStringList EngineBridge::ndiSourceNames() const {
@@ -82,8 +92,19 @@ QStringList EngineBridge::ndiSourceNames() const {
     return out;
 }
 
+QStringList EngineBridge::omtSourceNames() const {
+    QStringList out;
+    for (const auto& s : engine_.omtSources())
+        out << QString::fromStdString(s);
+    return out;
+}
+
 QString EngineBridge::inputRef(int input) const {
     return QString::fromStdString(engine_.inputRef(input));
+}
+
+int EngineBridge::inputType(int input) const {
+    return int(engine_.inputType(input));
 }
 
 void EngineBridge::poll() {

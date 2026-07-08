@@ -5,8 +5,10 @@
 
 namespace moo::gpu {
 
-Nv12Ring::Nv12Ring(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQueue)
-    : eng_(eng), desc_(desc), queue_(xferQueue) {
+Nv12Ring::Nv12Ring(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQueue,
+                   int slots)
+    : eng_(eng), desc_(desc), queue_(xferQueue),
+      slots_(new Slot[size_t(slots)]), nSlots_(slots) {
     desc_.pixfmt = PixFmt::NV12;
     pool_ = eng_.createCommandPool(queue_.family);
     tl_ = eng_.createTimeline();
@@ -16,7 +18,8 @@ Nv12Ring::Nv12Ring(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQueue)
     cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cai.commandBufferCount = 1;
 
-    for (auto& s : slots_) {
+    for (int i = 0; i < nSlots_; ++i) {
+        auto& s = slots_[i];
         s.staging = eng_.createBuffer(desc_.frameBytes(),
                                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, 0,
@@ -35,22 +38,22 @@ Nv12Ring::Nv12Ring(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQueue)
 
 Nv12Ring::~Nv12Ring() {
     if (tl_.lastReserved()) tl_.waitCompleted(tl_.lastReserved(), 2'000'000'000);
-    for (auto& s : slots_) {
-        eng_.destroyBuffer(s.staging);
-        eng_.destroyImage(s.y);
-        eng_.destroyImage(s.uv);
+    for (int i = 0; i < nSlots_; ++i) {
+        eng_.destroyBuffer(slots_[i].staging);
+        eng_.destroyImage(slots_[i].y);
+        eng_.destroyImage(slots_[i].uv);
     }
     if (pool_) vkDestroyCommandPool(eng_.device(), pool_, nullptr);
     eng_.destroyTimeline(tl_);
 }
 
 int Nv12Ring::acquire() {
-    for (int i = 0; i < kSlots; ++i) {
-        const int s = (cursor_ + i) % kSlots;
+    for (int i = 0; i < nSlots_; ++i) {
+        const int s = (cursor_ + i) % nSlots_;
         auto& slot = slots_[s];
         if (slot.renderRefs.load(std::memory_order_acquire) > 0) continue;
         if (slot.lastSubmit > tl_.completed()) continue;
-        cursor_ = (s + 1) % kSlots;
+        cursor_ = (s + 1) % nSlots_;
         return s;
     }
     return -1;

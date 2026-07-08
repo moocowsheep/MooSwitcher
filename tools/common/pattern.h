@@ -167,6 +167,32 @@ inline void fillNoise(uint8_t* buf, int strideBytes, int W, int H,
     }
 }
 
+// Mid-entropy content: per-slot random flat 8x8 blocks -- spatially busy but
+// DCT-compressible, temporally chaotic across the precomputed ring. A stand-in
+// for detailed real-world content between bars (~1000x compressible) and
+// full noise (incompressible).
+inline void fillMid(uint8_t* buf, int strideBytes, int W, int H,
+                    uint32_t seed) {
+    uint32_t s = seed * 2246822519u + 54321u;
+    auto rnd = [&] {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        return s;
+    };
+    for (int y = kPatternTop; y < H; y += 8) {
+        const int bh = std::min(8, H - y);
+        for (int x = 0; x < W; x += 8) {
+            const uint32_t r = rnd();
+            const uint8_t Y = uint8_t(16 + (r & 0xFF) % 220);
+            const uint8_t U = uint8_t(16 + ((r >> 8) & 0xFF) % 209);
+            const uint8_t V = uint8_t(16 + ((r >> 16) & 0xFF) % 209);
+            fillRectUYVY(buf, strideBytes, x, y, std::min(8, W - x), bh, Y, U,
+                         V);
+        }
+    }
+}
+
 // Moving bar: white vertical bar over the bars region; position by slot so a
 // precomputed ring of K frames loops seamlessly.
 inline void bakeMovingBar(uint8_t* buf, int strideBytes, int W, int H, int slot,

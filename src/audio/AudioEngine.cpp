@@ -7,13 +7,29 @@
 
 namespace moo::audio {
 
+void InputChannel::notePts(int64_t senderPtsNs) {
+    // Estimated playout of this chunk's first sample: everything already in
+    // the ring plays first at the mixer's fixed drain rate. Measured before
+    // our own delay line, so applying the auto trim never feeds back into
+    // the measurement.
+    const int64_t now = MediaClock::nowNs();
+    const int64_t aheadFrames = int64_t(ring_.fill()) / kChannels;
+    const int64_t playout = now + aheadFrames * 1'000'000'000LL / kSampleRate;
+    const int64_t s = playout - senderPtsNs;
+    const int64_t prev = pmp_.load(std::memory_order_relaxed);
+    const bool first = pmpAtNs_.load(std::memory_order_relaxed) == 0;
+    pmp_.store(first ? s : prev + (s - prev) / 64, std::memory_order_relaxed);
+    pmpAtNs_.store(now, std::memory_order_relaxed);
+}
+
 void InputChannel::pushPlanar(const float* l, const float* r, int frames,
-                              int rate) {
+                              int rate, int64_t senderPtsNs) {
     if (frames <= 0) return;
     if (rate != kSampleRate) {
         badRateFrames.fetch_add(frames, std::memory_order_relaxed);
         return;
     }
+    if (senderPtsNs != kNoPts) notePts(senderPtsNs);
     conv_.resize(size_t(frames) * kChannels);
     for (int f = 0; f < frames; ++f) {
         conv_[size_t(2 * f)] = l[f];
@@ -27,12 +43,14 @@ void InputChannel::pushPlanar(const float* l, const float* r, int frames,
                                 std::memory_order_relaxed);
 }
 
-void InputChannel::pushInterleaved(const float* lr, int frames, int rate) {
+void InputChannel::pushInterleaved(const float* lr, int frames, int rate,
+                                   int64_t senderPtsNs) {
     if (frames <= 0) return;
     if (rate != kSampleRate) {
         badRateFrames.fetch_add(frames, std::memory_order_relaxed);
         return;
     }
+    if (senderPtsNs != kNoPts) notePts(senderPtsNs);
     const size_t want = size_t(frames) * kChannels;
     const size_t got = ring_.write(lr, want);
     pushedFrames.fetch_add(frames, std::memory_order_relaxed);
@@ -90,6 +108,13 @@ void AudioEngine::run(std::stop_token st) {
         size_t(n), std::vector<float>(size_t(kChunkFrames) * kChannels));
     std::vector<const float*> in(size_t(n), nullptr);
     std::vector<MixerCore::ChannelParams> params(static_cast<size_t>(n));
+    // Frame-sync auto trim, applied value per channel. Jumps to the target
+    // while the lane is held/re-arming (connect, replace -- silent anyway)
+    // or on a generation bump; slews ~1 ms/s with a 0.5 ms deadband while
+    // live, so the DelayLine tap never steps audibly.
+    std::vector<int> autoApplied(size_t(n), 0);
+    std::vector<uint32_t> autoGen(size_t(n), 0);
+    std::vector<char> autoEver(size_t(n), 0);  // first target since (re)gen jumps
     std::vector<float> out(size_t(kChunkFrames) * kChannels);
     std::vector<float> peaks(size_t(n) * 2);
     std::vector<float> discard;
@@ -112,8 +137,26 @@ void AudioEngine::run(std::stop_token st) {
             prm.gain = ch.gain.load(std::memory_order_relaxed);
             prm.mute = ch.mute.load(std::memory_order_relaxed);
             prm.solo = ch.solo.load(std::memory_order_relaxed);
-            prm.delayFrames = framesForMs(std::clamp(
-                ch.delayMs.load(std::memory_order_relaxed), 0, kMaxInputDelayMs));
+
+            const int target = ch.autoDelayFrames.load(std::memory_order_relaxed);
+            int& ap = autoApplied[size_t(i)];
+            if (const uint32_t g = ch.autoDelayGen.load(std::memory_order_relaxed);
+                g != autoGen[size_t(i)]) {
+                autoGen[size_t(i)] = g;
+                autoEver[size_t(i)] = 0;
+                ap = 0;
+            }
+            if (ch.holding_ || (!autoEver[size_t(i)] && target > 0)) {
+                ap = target;  // lane silent / first lock: free to jump
+            } else if (std::abs(target - ap) > framesForMs(1) / 2 && (m & 3) == 0) {
+                ap += target > ap ? 1 : -1;  // 1 frame / 4 chunks ~= 1 ms/s
+            }
+            if (target > 0) autoEver[size_t(i)] = 1;
+            prm.delayFrames = std::clamp(
+                framesForMs(std::clamp(ch.delayMs.load(std::memory_order_relaxed),
+                                       0, kMaxInputDelayMs)) +
+                    ap,
+                0, framesForMs(kMaxInputDelayMs));
 
             // Latency guard: after a stall or a connect backlog the ring can
             // sit far above prefill; drop back down so steady-state latency
@@ -128,8 +171,19 @@ void AudioEngine::run(std::stop_token st) {
                 fill = ch.ring_.fill();
             }
 
-            if (ch.holding_ && fill >= size_t(kPrefillFrames) * kChannels)
+            if (ch.holding_ && fill >= size_t(kPrefillFrames) * kChannels) {
+                if (ch.syncManaged.load(std::memory_order_relaxed) &&
+                    fill > size_t(kPrefillFrames) * kChannels) {
+                    // Drop the connect/reconnect backlog above prefill (see
+                    // syncManaged in the header). Lane is silent: inaudible.
+                    const size_t excess = fill - size_t(kPrefillFrames) * kChannels;
+                    discard.resize(excess);
+                    const size_t got = ch.ring_.read(discard.data(), excess);
+                    ch.trimmedFrames.fetch_add(int64_t(got) / kChannels,
+                                               std::memory_order_relaxed);
+                }
                 ch.holding_ = false;
+            }
 
             if (!ch.holding_) {
                 auto& buf = bufs[size_t(i)];

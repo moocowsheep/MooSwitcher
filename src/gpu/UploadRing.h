@@ -22,9 +22,12 @@ public:
     // render pins up to two more across frames-in-flight, and the input
     // mailbox retains the previous publish for the late-upload fallback --
     // 4 was the minimum before that retention existed (3 starved).
+    // Frame-sync inputs pass a larger count: queued frames pin their slots
+    // until presented (docs/design-framesync.md).
     static constexpr int kSlots = 5;
 
-    UploadRing(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQueue);
+    UploadRing(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQueue,
+               int slots = kSlots);
     ~UploadRing();
     UploadRing(const UploadRing&) = delete;
     UploadRing& operator=(const UploadRing&) = delete;
@@ -62,7 +65,8 @@ private:
     Queue& queue_;
     VkCommandPool pool_ = VK_NULL_HANDLE;
     Timeline tl_;
-    Slot slots_[kSlots];
+    std::unique_ptr<Slot[]> slots_;  // atomics: sized once, never moved
+    int nSlots_;
     int cursor_ = 0;
 };
 

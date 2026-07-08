@@ -36,9 +36,12 @@ public slots:
     void setAudioDelayMs(int input, int ms);
     void setMasterDelayMs(int ms);
 
-    // Source picker: srt:// refs become SRT inputs, anything else is an NDI
-    // name substring. Takes effect at the next render tick.
-    void replaceInput(int input, QString ref);
+    // Source picker: type -1 = infer from the ref (srt://->SRT, omt://->OMT,
+    // anything else = NDI name substring); 0/1/2 force Ndi/Srt/Omt — needed
+    // for OMT discovery names, which carry no scheme. syncFrames: -1 off,
+    // 0 measure-only (auto A/V trim), 1..4 buffered. Takes effect at the
+    // next render tick.
+    void replaceInput(int input, QString ref, int syncFrames, int type = -1);
 
 public:
     bool audioAvailable() const { return engine_.audio() != nullptr; }
@@ -48,7 +51,11 @@ public:
     bool audioMute(int input) const;
     bool audioSolo(int input) const;
     QStringList ndiSourceNames() const;
+    QStringList omtSourceNames() const;  // empty when built without OMT
     QString inputRef(int input) const;
+    int inputType(int input) const;  // InputSpec::Type as int (0 Ndi/1 Srt/2 Omt)
+    int inputSyncFrames(int input) const { return engine_.inputSyncFrames(input); }
+    int audioAutoTrimMs(int input) const;  // applied frame-sync trim readout
     int inputCount() const { return engine_.inputCount(); }
 
 signals:

@@ -34,6 +34,7 @@ int main(int argc, char** argv) {
         bool done = false;
     };
     std::vector<Replace> replaces;  // --replace-after S:IDX:REF
+    std::vector<std::pair<int, int>> syncSpecs;  // --framesync IDX[:FRAMES]
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -44,6 +45,9 @@ int main(int argc, char** argv) {
         } else if (a == "--srt-input") {
             if (const char* v = next())
                 cfg.inputs.push_back({moo::InputSpec::Type::Srt, v});
+        } else if (a == "--omt-input") {
+            if (const char* v = next())
+                cfg.inputs.push_back({moo::InputSpec::Type::Omt, v});
         } else if (a == "--show") {
             const char* v = next();
             if (!v || sscanf(v, "%dx%d", &cfg.show.width, &cfg.show.height) != 2)
@@ -86,20 +90,38 @@ int main(int argc, char** argv) {
             if (!v || sscanf(v, "%lf:%d:%n", &s, &idx, &off) != 2 || !v[off])
                 return 2;
             replaces.push_back({s, idx, std::string(v + off)});
+        } else if (a == "--framesync") {
+            // IDX[:FRAMES] -- FRAMES 0 = measure-only, default 1. Applied
+            // after defaults so it also works with the implicit MooBench
+            // inputs.
+            const char* v = next();
+            int idx = 0, fr = 1;
+            if (!v || sscanf(v, "%d:%d", &idx, &fr) < 1) return 2;
+            if (idx < 0 || fr < 0 || fr > 4) return 2;
+            syncSpecs.emplace_back(idx, fr);
         } else if (a == "--validate") {
             cfg.validation = true;
         } else {
             fprintf(stderr,
                     "usage: moo-headless --input NAME [--input NAME ...] "
+                    "[--srt-input URL] [--omt-input NAME_OR_URL] "
                     "[--show WxH] [--duration S] [--dump-dir D] "
                     "[--dump-every S] [--cuts] [--no-audio] "
-                    "[--audio-delay MS] [--validate]\n");
+                    "[--audio-delay MS] [--framesync IDX[:FRAMES]] "
+                    "[--validate]\n");
             return 2;
         }
     }
     if (cfg.inputs.empty())
         cfg.inputs = {{moo::InputSpec::Type::Ndi, "MooBenchA"},
                       {moo::InputSpec::Type::Ndi, "MooBenchB"}};
+    for (auto [idx, fr] : syncSpecs) {
+        if (size_t(idx) >= cfg.inputs.size()) {
+            fprintf(stderr, "--framesync %d: no such input\n", idx);
+            return 2;
+        }
+        cfg.inputs[size_t(idx)].syncFrames = fr;
+    }
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
 
@@ -136,11 +158,12 @@ int main(int argc, char** argv) {
         for (auto& r : replaces) {
             if (!r.done && now >= t0 + int64_t(r.afterS * 1e9)) {
                 r.done = true;
-                const bool srt = r.ref.rfind("srt://", 0) == 0;
-                engine.requestInputReplace(
-                    r.idx, {srt ? moo::InputSpec::Type::Srt
-                                : moo::InputSpec::Type::Ndi,
-                            r.ref});
+                const auto type =
+                    r.ref.rfind("srt://", 0) == 0 ? moo::InputSpec::Type::Srt
+                    : r.ref.rfind("omt://", 0) == 0
+                        ? moo::InputSpec::Type::Omt
+                        : moo::InputSpec::Type::Ndi;
+                engine.requestInputReplace(r.idx, {type, r.ref});
             }
         }
         if (scriptedAutos && now >= nextCutNs) {

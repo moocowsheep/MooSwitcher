@@ -1,4 +1,5 @@
 #pragma once
+#include <QLabel>
 #include <QPushButton>
 #include <QWidget>
 
@@ -43,6 +44,7 @@ private:
     EngineBridge& bridge_;
     std::vector<MeterWidget*> meters_;
     std::vector<QPushButton*> nameBtns_;
+    std::vector<QLabel*> trimLabels_;  // frame-sync auto trim readouts
     MeterWidget* masterMeter_ = nullptr;
 };
 

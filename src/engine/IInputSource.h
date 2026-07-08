@@ -19,6 +19,18 @@ public:
     using FramePtr = std::shared_ptr<const gpu::GpuFrame>;
     using Mailbox = LatestMailbox<FramePtr>;
 
+    // Frame-sync feed sample (docs/design-framesync.md): every publish,
+    // timestamped. srcPtsNs is the sender/pts clock (deltas trustworthy,
+    // absolutes not); arrNs is local CLOCK_MONOTONIC at capture.
+    struct TimedFrame {
+        FramePtr frame;
+        uint64_t seq = 0;
+        int64_t srcPtsNs = 0;
+        int64_t arrNs = 0;
+        bool senderClock = true;  // false: pts synthesized from arrival
+    };
+    using SyncFeed = SpscRing<TimedFrame>;
+
     struct Status {
         bool connected = false;
         int64_t frames = 0;
@@ -42,6 +54,12 @@ public:
 
     virtual Status status() const = 0;
     virtual void setTally(bool /*onProgram*/, bool /*onPreview*/) {}
+
+    // Non-null when the input was created with frame sync enabled: the
+    // capture thread pushes every publish here too; the render tick drains
+    // it into the input's FrameSync. The mailbox stays authoritative for
+    // sync-off inputs.
+    virtual SyncFeed* syncFeed() { return nullptr; }
 
     // Wire this input's audio into a mixer lane. Safe to call while running
     // (audio before attach is dropped); sources without audio ignore it.
