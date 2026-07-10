@@ -194,6 +194,11 @@ int main(int argc, char** argv) {
             pat::bakeMovingBar(slots[i].data(), strideBytes, opt.width,
                                opt.height, i, K);
         if (opt.uyva) {
+            // Distinct solid band fill (75% blue): keyed output is
+            // unmistakable over any program content.
+            pat::fillRectUYVY(slots[i].data(), strideBytes, 0,
+                              pat::alphaBandY0(opt.height), opt.width,
+                              pat::alphaBandH(opt.height), 28, 212, 120);
             pat::bakeAlphaPlane(slots[i].data(), strideBytes, opt.width,
                                 opt.height);
             if (opt.premult)

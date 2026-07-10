@@ -35,6 +35,14 @@ int main(int argc, char** argv) {
     };
     std::vector<Replace> replaces;  // --replace-after S:IDX:REF
     std::vector<std::pair<int, int>> syncSpecs;  // --framesync IDX[:FRAMES]
+    std::vector<std::pair<int, int>> dskArms;   // --dsk K:SRC
+    std::vector<std::pair<int, int>> dskFades;  // --dsk-fade K:TICKS
+    struct DskToggle {
+        double afterS;
+        int k;
+        bool done = false;
+    };
+    std::vector<DskToggle> dskToggles;  // --dsk-toggle-after S:K
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -99,6 +107,22 @@ int main(int argc, char** argv) {
             if (!v || sscanf(v, "%d:%d", &idx, &fr) < 1) return 2;
             if (idx < 0 || fr < 0 || fr > 4) return 2;
             syncSpecs.emplace_back(idx, fr);
+        } else if (a == "--dsk") {
+            const char* v = next();
+            int k = 0, src = 0;
+            if (!v || sscanf(v, "%d:%d", &k, &src) != 2) return 2;
+            dskArms.emplace_back(k, src);
+        } else if (a == "--dsk-fade") {
+            const char* v = next();
+            int k = 0, ticks = 0;
+            if (!v || sscanf(v, "%d:%d", &k, &ticks) != 2) return 2;
+            dskFades.emplace_back(k, ticks);
+        } else if (a == "--dsk-toggle-after") {
+            const char* v = next();
+            double s = 0;
+            int k = 0;
+            if (!v || sscanf(v, "%lf:%d", &s, &k) != 2) return 2;
+            dskToggles.push_back({s, k});
         } else if (a == "--validate") {
             cfg.validation = true;
         } else {
@@ -108,7 +132,8 @@ int main(int argc, char** argv) {
                     "[--show WxH] [--duration S] [--dump-dir D] "
                     "[--dump-every S] [--cuts] [--no-audio] "
                     "[--audio-delay MS] [--framesync IDX[:FRAMES]] "
-                    "[--validate]\n");
+                    "[--dsk K:SRC] [--dsk-fade K:TICKS] "
+                    "[--dsk-toggle-after S:K] [--validate]\n");
             return 2;
         }
     }
@@ -134,6 +159,10 @@ int main(int argc, char** argv) {
         for (auto [idx, ms] : inputDelays)
             if (idx >= 0 && idx < aud->inputCount())
                 aud->channel(idx).delayMs.store(ms);
+    for (auto [k, src] : dskArms)
+        engine.post({moo::Command::Type::SetDskSource, k, src, 0.f});
+    for (auto [k, ticks] : dskFades)
+        engine.post({moo::Command::Type::SetDskFade, k, ticks, 0.f});
 
     const int64_t t0 = moo::MediaClock::nowNs();
     const int64_t endNs = t0 + int64_t(duration * 1e9);
@@ -164,6 +193,12 @@ int main(int argc, char** argv) {
                         ? moo::InputSpec::Type::Omt
                         : moo::InputSpec::Type::Ndi;
                 engine.requestInputReplace(r.idx, {type, r.ref});
+            }
+        }
+        for (auto& t : dskToggles) {
+            if (!t.done && now >= t0 + int64_t(t.afterS * 1e9)) {
+                t.done = true;
+                engine.post({moo::Command::Type::DskToggle, t.k, 0, 0.f});
             }
         }
         if (scriptedAutos && now >= nextCutNs) {

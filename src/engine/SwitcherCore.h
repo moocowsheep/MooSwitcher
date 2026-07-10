@@ -7,6 +7,8 @@ enum class TransitionType : uint8_t {
     Mix = 0, WipeLR, WipeRL, WipeTB, WipeBT, WipeBox, WipeCircle
 };
 
+inline constexpr int kDskCount = 2;
+
 // Everything the compositor needs to render one output frame.
 struct CompositeJob {
     int programSrc = 0;
@@ -16,6 +18,11 @@ struct CompositeJob {
     float softness = 0.f;
     float ftb = 0.f;  // 0 = normal, 1 = full black
     bool transitionActive = false;
+    // Downstream keyers, composited over the A/B mix (DSK2 over DSK1),
+    // under FTB. level animates; on = engaged target (for tally).
+    int dskSrc[kDskCount] = {0, 0};
+    float dskLevel[kDskCount] = {0.f, 0.f};
+    bool dskOn[kDskCount] = {false, false};
 };
 
 // Pure program/preview bus + transition state machine. No I/O, no clocks:
@@ -43,6 +50,11 @@ public:
     void tbarEnd();
     void fadeToBlack();  // toggles FTB target
     void setFtbDuration(int64_t ticks);
+    // DSKs: independent on/off fades (FTB semantics), never tied to A/B
+    // transitions. Source/duration changes never disturb a running level.
+    void dskToggle(int k);
+    void setDskSource(int k, int src);
+    void setDskDuration(int k, int64_t ticks);
 
     CompositeJob tick(int64_t nowTick);
 
@@ -50,6 +62,10 @@ public:
     int preview() const { return preview_; }
     bool inTransition() const { return autoActive_ || tbarActive_; }
     bool ftbEngaged() const { return ftbTarget_ > 0.5f; }
+    bool dskOn(int k) const { return dsk_[k].target > 0.5f; }
+    float dskLevel(int k) const { return dsk_[k].level; }
+    int dskSource(int k) const { return dsk_[k].src; }
+    int64_t dskDuration(int k) const { return dsk_[k].dur; }
 
 private:
     void completeTransition();
@@ -71,7 +87,16 @@ private:
     float ftbLevel_ = 0.f;
     float ftbTarget_ = 0.f;
     int64_t ftbDur_ = 30;
-    int64_t lastFtbTick_ = -1;
+
+    struct Dsk {
+        int src = 0;
+        float level = 0.f;
+        float target = 0.f;
+        int64_t dur = 30;
+    };
+    Dsk dsk_[kDskCount];
+
+    int64_t lastTick_ = -1;  // shared by the FTB and DSK ramps
 };
 
 }  // namespace moo

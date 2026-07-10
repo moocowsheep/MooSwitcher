@@ -39,6 +39,10 @@ public:
         std::vector<SourceRef> mvInputs;  // per input, frame or placeholder
         int previewInputIdx = -1;         // input index on PVW bus (-1 = none)
         int tallyPgmA = -1, tallyPgmB = -1, tallyPvw = -1;
+        // Keyer fill frames (null = keyer dark; levels/flags ride in sw)
+        // and their input indices for the red multiview border (-1 = none).
+        const GpuFrame* dsk[kDskCount] = {nullptr, nullptr};
+        int tallyDsk[kDskCount] = {-1, -1};
         bool packProgram = false;         // record UYVY pack (NDI out enabled)
         bool packNv12 = false;            // record NV12 pack (SRT out enabled)
     };

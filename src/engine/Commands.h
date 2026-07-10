@@ -14,6 +14,9 @@ struct Command {
         TbarEnd,
         FadeToBlack,
         SetTransition,  // arg = TransitionType, arg2 = duration ticks, farg = softness
+        DskToggle,      // arg = keyer index
+        SetDskSource,   // arg = keyer index, arg2 = source index
+        SetDskFade,     // arg = keyer index, arg2 = duration ticks
     } type = Type::Cut;
     int arg = 0;
     int arg2 = 0;

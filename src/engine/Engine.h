@@ -88,6 +88,9 @@ public:
         bool inTransition = false;
         bool ftbEngaged = false;
         float ftbLevel = 0.f;
+        bool dskOn[kDskCount] = {false, false};
+        float dskLevel[kDskCount] = {0.f, 0.f};
+        int dskSrc[kDskCount] = {0, 0};
     };
     UiState uiState() const {
         std::lock_guard lk(uiM_);

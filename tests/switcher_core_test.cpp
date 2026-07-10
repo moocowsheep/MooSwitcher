@@ -124,3 +124,82 @@ TEST_CASE("wipe parameters pass through to the job") {
     REQUIRE(j.trans == TransitionType::WipeLR);
     REQUIRE(j.softness == Approx(0.25f));
 }
+
+TEST_CASE("DSK ramps up over its duration and clamps, rate-correct") {
+    SwitcherCore sw;
+    sw.setDskSource(0, 2);
+    sw.setDskDuration(0, 10);
+    sw.tick(0);  // establish tick baseline
+    sw.dskToggle(0);
+    REQUIRE(sw.dskOn(0));
+    REQUIRE(sw.tick(1).dskLevel[0] == Approx(0.1f));
+    REQUIRE(sw.tick(6).dskLevel[0] == Approx(0.6f));  // skipped ticks add 0.5
+    const CompositeJob j = sw.tick(20);
+    REQUIRE(j.dskLevel[0] == Approx(1.0f));  // clamped
+    REQUIRE(j.dskSrc[0] == 2);
+    REQUIRE(j.dskOn[0]);
+    REQUIRE_FALSE(j.dskOn[1]);
+    REQUIRE(j.dskLevel[1] == 0.f);
+}
+
+TEST_CASE("DSK toggle mid-fade reverses from the current level") {
+    SwitcherCore sw;
+    sw.setDskDuration(0, 10);
+    sw.tick(0);
+    sw.dskToggle(0);
+    REQUIRE(sw.tick(5).dskLevel[0] == Approx(0.5f));
+    sw.dskToggle(0);  // reverse mid-fade
+    REQUIRE_FALSE(sw.dskOn(0));
+    REQUIRE(sw.tick(7).dskLevel[0] == Approx(0.3f));
+    REQUIRE(sw.tick(15).dskLevel[0] == Approx(0.0f));
+}
+
+TEST_CASE("DSK is independent of cut/auto/FTB; source change keeps level") {
+    SwitcherCore sw;
+    sw.setDskDuration(0, 10);
+    sw.tick(0);
+    sw.dskToggle(0);
+    sw.tick(10);
+    REQUIRE(sw.dskLevel(0) == Approx(1.0f));
+
+    sw.cut();
+    REQUIRE(sw.tick(11).dskLevel[0] == Approx(1.0f));
+    sw.autoTransition(12);
+    sw.tick(13);
+    REQUIRE(sw.dskLevel(0) == Approx(1.0f));
+    sw.fadeToBlack();
+    const CompositeJob j = sw.tick(20);
+    REQUIRE(j.dskLevel[0] == Approx(1.0f));  // FTB rides over, level unmoved
+    REQUIRE(j.ftb > 0.f);
+
+    sw.setDskSource(0, 3);  // live source change: level untouched
+    const CompositeJob j2 = sw.tick(21);
+    REQUIRE(j2.dskSrc[0] == 3);
+    REQUIRE(j2.dskLevel[0] == Approx(1.0f));
+}
+
+TEST_CASE("two DSKs ramp independently with different durations") {
+    SwitcherCore sw;
+    sw.setDskDuration(0, 10);
+    sw.setDskDuration(1, 20);
+    sw.tick(0);
+    sw.dskToggle(0);
+    sw.dskToggle(1);
+    const CompositeJob j = sw.tick(5);
+    REQUIRE(j.dskLevel[0] == Approx(0.5f));
+    REQUIRE(j.dskLevel[1] == Approx(0.25f));
+    REQUIRE(sw.tick(10).dskLevel[0] == Approx(1.0f));
+    REQUIRE(sw.tick(20).dskLevel[1] == Approx(1.0f));
+}
+
+TEST_CASE("DSK keyer index bounds are enforced") {
+    SwitcherCore sw;
+    sw.dskToggle(-1);
+    sw.dskToggle(2);
+    sw.setDskSource(5, 1);
+    sw.setDskDuration(-3, 5);
+    const CompositeJob j = sw.tick(0);
+    REQUIRE(j.dskLevel[0] == 0.f);
+    REQUIRE(j.dskLevel[1] == 0.f);
+    REQUIRE_FALSE(j.dskOn[0]);
+}

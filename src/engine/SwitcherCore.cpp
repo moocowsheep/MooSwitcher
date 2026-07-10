@@ -48,6 +48,21 @@ void SwitcherCore::fadeToBlack() { ftbTarget_ = ftbTarget_ > 0.5f ? 0.f : 1.f; }
 
 void SwitcherCore::setFtbDuration(int64_t ticks) { ftbDur_ = std::max<int64_t>(1, ticks); }
 
+void SwitcherCore::dskToggle(int k) {
+    if (k < 0 || k >= kDskCount) return;
+    dsk_[k].target = dsk_[k].target > 0.5f ? 0.f : 1.f;
+}
+
+void SwitcherCore::setDskSource(int k, int src) {
+    if (k < 0 || k >= kDskCount) return;
+    dsk_[k].src = src;  // live change allowed; level untouched
+}
+
+void SwitcherCore::setDskDuration(int k, int64_t ticks) {
+    if (k < 0 || k >= kDskCount) return;
+    dsk_[k].dur = std::max<int64_t>(1, ticks);
+}
+
 void SwitcherCore::completeTransition() {
     std::swap(program_, preview_);
     autoActive_ = false;
@@ -62,15 +77,19 @@ void SwitcherCore::cancelTransition() {
 }
 
 CompositeJob SwitcherCore::tick(int64_t nowTick) {
-    // FTB ramps by elapsed ticks so skipped ticks stay rate-correct.
-    if (lastFtbTick_ >= 0 && nowTick > lastFtbTick_) {
-        const float step = float(nowTick - lastFtbTick_) / float(ftbDur_);
-        if (ftbLevel_ < ftbTarget_)
-            ftbLevel_ = std::min(ftbTarget_, ftbLevel_ + step);
-        else if (ftbLevel_ > ftbTarget_)
-            ftbLevel_ = std::max(ftbTarget_, ftbLevel_ - step);
-    }
-    lastFtbTick_ = nowTick;
+    // FTB and DSK levels ramp by elapsed ticks so skipped ticks stay
+    // rate-correct.
+    const int64_t elapsed =
+        lastTick_ >= 0 && nowTick > lastTick_ ? nowTick - lastTick_ : 0;
+    auto ramp = [elapsed](float& level, float target, int64_t dur) {
+        if (!elapsed) return;
+        const float step = float(elapsed) / float(dur);
+        if (level < target) level = std::min(target, level + step);
+        else if (level > target) level = std::max(target, level - step);
+    };
+    ramp(ftbLevel_, ftbTarget_, ftbDur_);
+    for (auto& d : dsk_) ramp(d.level, d.target, d.dur);
+    lastTick_ = nowTick;
 
     float alpha = 0.f;
     if (autoActive_) {
@@ -91,6 +110,11 @@ CompositeJob SwitcherCore::tick(int64_t nowTick) {
     job.softness = softness_;
     job.ftb = ftbLevel_;
     job.transitionActive = autoActive_ || tbarActive_;
+    for (int k = 0; k < kDskCount; ++k) {
+        job.dskSrc[k] = dsk_[k].src;
+        job.dskLevel[k] = dsk_[k].level;
+        job.dskOn[k] = dsk_[k].target > 0.5f;
+    }
     return job;
 }
 

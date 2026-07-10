@@ -12,7 +12,15 @@ layout(binding = 1) uniform sampler2D inAuv;  // NV12 CbCr (else rebound to inA)
 layout(binding = 2) uniform sampler2D inB;
 layout(binding = 3) uniform sampler2D inBuv;
 layout(binding = 4, rgba16f) uniform writeonly image2D outImg;
+// Downstream keyers: aux = NV12 CbCr | UYVA alpha | self-rebound fill
+// (host guarantees NV12 and alpha are mutually exclusive).
+layout(binding = 5) uniform sampler2D k1Fill;
+layout(binding = 6) uniform sampler2D k1Aux;
+layout(binding = 7) uniform sampler2D k2Fill;
+layout(binding = 8) uniform sampler2D k2Aux;
 
+// Keyer flags: bit0 = NV12, bit1 = has alpha plane, bit2 = premultiplied,
+// bit3 = BT.601.
 layout(push_constant) uniform PC {
     ivec2 outSize;
     ivec2 aFull;   // full-res luma dimensions
@@ -27,6 +35,14 @@ layout(push_constant) uniform PC {
     int transType; // 0 = mix
     int aCm;       // 0 = BT.709, 1 = BT.601
     int bCm;
+    int k1Flags;
+    float k1Level;
+    vec4 k1Map;
+    ivec2 k1Full;
+    int k2Flags;
+    float k2Level;
+    vec4 k2Map;
+    ivec2 k2Full;
 } pc;
 
 vec3 fetchInput(sampler2D t, sampler2D tuv, int fmt, ivec2 full, vec4 map,
@@ -36,6 +52,22 @@ vec3 fetchInput(sampler2D t, sampler2D tuv, int fmt, ivec2 full, vec4 map,
         return vec3(0.0);
     if (fmt == 1) return nv12_sample(t, tuv, uvi, cm);
     return uyvy_sample_bilinear(t, full, uvi, cm);
+}
+
+// Keyer over `c`. Outside the aspect map = transparent. The alpha plane is
+// full-range (unlike limited-range Y/CbCr); a source without alpha keys
+// fully opaque (fadeable fullscreen overlay -- documented).
+vec3 applyKey(vec3 c, sampler2D t, sampler2D aux, int flags, ivec2 full,
+              vec4 map, float level, vec2 uv) {
+    vec2 uvi = uv * map.xy + map.zw;
+    if (any(lessThan(uvi, vec2(0.0))) || any(greaterThan(uvi, vec2(1.0))))
+        return c;
+    int cm = (flags >> 3) & 1;
+    vec3 rgb = ((flags & 1) != 0) ? nv12_sample(t, aux, uvi, cm)
+                                  : uyvy_sample_bilinear(t, full, uvi, cm);
+    float a = (((flags & 2) != 0) ? texture(aux, uvi).r : 1.0) * level;
+    if ((flags & 4) != 0) return rgb * level + c * (1.0 - a);  // premultiplied
+    return mix(c, rgb, a);  // straight
 }
 
 // Per-pixel B coverage. Wipes are signed-distance edges softened over
@@ -77,6 +109,14 @@ void main() {
         vec3 b = fetchInput(inB, inBuv, pc.bFmt, pc.bFull, pc.bMap, pc.bCm, uv);
         c = mix(c, b, m);
     }
+    // DSKs over the mix (DSK2 on top), under FTB so fade-to-black takes the
+    // graphics out too.
+    if (pc.k1Level > 0.0)
+        c = applyKey(c, k1Fill, k1Aux, pc.k1Flags, pc.k1Full, pc.k1Map,
+                     pc.k1Level, uv);
+    if (pc.k2Level > 0.0)
+        c = applyKey(c, k2Fill, k2Aux, pc.k2Flags, pc.k2Full, pc.k2Map,
+                     pc.k2Level, uv);
     c *= (1.0 - pc.ftb);
     imageStore(outImg, px, vec4(c, 1.0));
 }

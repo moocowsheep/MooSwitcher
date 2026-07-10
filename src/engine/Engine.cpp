@@ -387,7 +387,7 @@ void Engine::renderLoop(std::stop_token st) {
         b.resyncs += c.resyncs;
     };
 
-    uint32_t lastTallyKey = 0xFFFFFFFF;
+    uint64_t lastTallyKey = ~0ull;
 
     // The clock was started in start() (audio shares the origin); the first
     // few ticks may already be past, which sleepUntilTick treats as "go now".
@@ -410,6 +410,13 @@ void Engine::renderLoop(std::stop_token st) {
                 case Command::Type::FadeToBlack: switcher_.fadeToBlack(); break;
                 case Command::Type::SetTransition:
                     switcher_.setTransition(TransitionType(c.arg), c.arg2, c.farg);
+                    break;
+                case Command::Type::DskToggle: switcher_.dskToggle(c.arg); break;
+                case Command::Type::SetDskSource:
+                    switcher_.setDskSource(c.arg, c.arg2);
+                    break;
+                case Command::Type::SetDskFade:
+                    switcher_.setDskDuration(c.arg, c.arg2);
                     break;
             }
         }
@@ -484,7 +491,7 @@ void Engine::renderLoop(std::stop_token st) {
                     renderTL_.waitCompleted(renderTL_.lastReserved(),
                                             1'000'000'000);
                 if (!buildLabelAtlas()) MOO_LOGE("label atlas rebuild failed");
-                lastTallyKey = 0xFFFFFFFF;  // re-send tally to the new source
+                lastTallyKey = ~0ull;  // re-send tally to the new source
             }
         }
 
@@ -495,21 +502,36 @@ void Engine::renderLoop(std::stop_token st) {
 
         {
             std::lock_guard lk(uiM_);
-            ui_ = {switcher_.program(), switcher_.preview(), job.transitionActive,
-                   switcher_.ftbEngaged(), job.ftb};
+            ui_ = {switcher_.program(),
+                   switcher_.preview(),
+                   job.transitionActive,
+                   switcher_.ftbEngaged(),
+                   job.ftb,
+                   {job.dskOn[0], job.dskOn[1]},
+                   {job.dskLevel[0], job.dskLevel[1]},
+                   {job.dskSrc[0], job.dskSrc[1]}};
         }
 
-        // -- tally to sources (both buses are hot during a transition) --
+        // -- tally to sources (both buses are hot during a transition; a
+        //    DSK source is program while engaged or still fading out) --
         const int tPgmA = job.programSrc;
         const int tPgmB =
             (job.transitionActive || job.alpha > 0.f) ? job.previewSrc : -1;
         const int tPvw = job.previewSrc;
-        const uint32_t tallyKey = uint32_t(tPgmA + 1) |
-                                  (uint32_t(tPgmB + 1) << 10) |
-                                  (uint32_t(tPvw + 1) << 20);
+        int tDsk[kDskCount];
+        for (int k = 0; k < kDskCount; ++k)
+            tDsk[k] = (job.dskOn[k] || job.dskLevel[k] > 0.f) ? job.dskSrc[k]
+                                                              : -1;
+        const uint64_t tallyKey = uint64_t(uint32_t(tPgmA + 1)) |
+                                  (uint64_t(uint32_t(tPgmB + 1)) << 10) |
+                                  (uint64_t(uint32_t(tPvw + 1)) << 20) |
+                                  (uint64_t(uint32_t(tDsk[0] + 1)) << 30) |
+                                  (uint64_t(uint32_t(tDsk[1] + 1)) << 40);
         if (tallyKey != lastTallyKey) {
             for (int i = 0; i < N; ++i)
-                inputs_[size_t(i)]->setTally(i == tPgmA || i == tPgmB, i == tPvw);
+                inputs_[size_t(i)]->setTally(
+                    i == tPgmA || i == tPgmB || i == tDsk[0] || i == tDsk[1],
+                    i == tPvw);
             lastTallyKey = tallyKey;
         }
 
@@ -621,6 +643,19 @@ void Engine::renderLoop(std::stop_token st) {
         tj.tallyPvw = tPvw;
         tj.mvInputs.resize(size_t(N));
         for (int i = 0; i < N; ++i) tj.mvInputs[size_t(i)].frame = pick(i);
+        // DSK fill frames. A dead/stale source picks the placeholder --
+        // force that keyer dark instead of overlaying opaque black; the
+        // overlay returns with the signal (state machine untouched).
+        for (int k = 0; k < kDskCount; ++k) {
+            const gpu::GpuFrame* f = pick(job.dskSrc[k]);
+            if (f == placeholder_.get()) {
+                tj.dsk[k] = nullptr;
+                tj.sw.dskLevel[k] = 0.f;
+            } else {
+                tj.dsk[k] = f;
+            }
+            tj.tallyDsk[k] = tDsk[k];
+        }
 
         // -- frame slot: wait out the submission from 2 ticks ago --
         const uint64_t value = renderTL_.reserve();
@@ -692,6 +727,7 @@ void Engine::renderLoop(std::stop_token st) {
         addWait(tj.a);
         addWait(tj.b);
         for (auto& s : tj.mvInputs) addWait(s.frame);
+        for (const auto* f : tj.dsk) addWait(f);  // dedup'd above
 
         const VkSemaphoreSubmitInfo signal = gpu::VkEngine::timelineSignal(
             renderTL_, value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);

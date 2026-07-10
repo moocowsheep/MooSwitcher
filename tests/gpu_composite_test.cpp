@@ -190,3 +190,137 @@ TEST_CASE("UYVA upload ring carries the alpha plane") {
     CHECK(frame2->viewA() == VK_NULL_HANDLE);
     CHECK_FALSE(frame2->premult);
 }
+
+TEST_CASE("DSK keying: straight, premult, opaque fallback, FTB over keyers") {
+    GpuFixture fx;
+    if (!fx.ok) SKIP("no Vulkan device");
+    auto& eng = fx.eng;
+
+    VideoFormatDesc d;
+    d.width = 64;
+    d.height = 36;
+    d.colorimetry = Colorimetry::BT709;
+
+    // Program bus: flat 75% red (RGB ~(191,0,0)).
+    auto ringA = std::make_shared<gpu::UploadRing>(eng, d, eng.xferUp());
+    const int slotA = ringA->acquire();
+    pattern::fillRectUYVY(ringA->stagingPtr(slotA), int(d.rowBytes()), 0, 0,
+                          d.width, d.height, 51, 109, 212);
+    const uint64_t vA = ringA->submit(slotA);
+    REQUIRE(ringA->timeline().waitCompleted(vA, 1'000'000'000));
+    auto progFrame = std::make_shared<const gpu::GpuFrame>(ringA, slotA, vA);
+
+    // Key: flat 75% green (RGB ~(0,191,0)) UYVA, alpha 128 everywhere.
+    VideoFormatDesc dk = d;
+    dk.pixfmt = PixFmt::UYVA8_4224;
+    auto ringK = std::make_shared<gpu::UploadRing>(eng, dk, eng.xferUp());
+    const int slotK = ringK->acquire();
+    pattern::fillRectUYVY(ringK->stagingPtr(slotK), int(dk.rowBytes()), 0, 0,
+                          dk.width, dk.height, 133, 63, 52);
+    memset(ringK->stagingPtr(slotK) + dk.alphaOffset(), 128,
+           size_t(dk.width) * dk.height);
+    const uint64_t vK = ringK->submit(slotK);
+    REQUIRE(ringK->timeline().waitCompleted(vK, 1'000'000'000));
+    auto keyStraight = std::make_shared<const gpu::GpuFrame>(ringK, slotK, vK);
+    auto keyPremult =
+        std::make_shared<const gpu::GpuFrame>(ringK, slotK, vK, true);
+
+    // No-alpha "key": plain UYVY green.
+    auto ringG = std::make_shared<gpu::UploadRing>(eng, d, eng.xferUp());
+    const int slotG = ringG->acquire();
+    pattern::fillRectUYVY(ringG->stagingPtr(slotG), int(d.rowBytes()), 0, 0,
+                          d.width, d.height, 133, 63, 52);
+    const uint64_t vG = ringG->submit(slotG);
+    REQUIRE(ringG->timeline().waitCompleted(vG, 1'000'000'000));
+    auto keyOpaque = std::make_shared<const gpu::GpuFrame>(ringG, slotG, vG);
+
+    const int mvW = 64, mvH = 36;
+    gpu::Compositor comp(eng, d, mvW, mvH, 1);
+
+    VkCommandPool pool = eng.createCommandPool(eng.gfx().family);
+    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cai.commandPool = pool;
+    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    vkAllocateCommandBuffers(eng.device(), &cai, &cmd);
+    gpu::Timeline tl = eng.createTimeline();
+
+    auto run = [&](gpu::Compositor::TickJob& tj) {
+        vkResetCommandBuffer(cmd, 0);
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        vkBeginCommandBuffer(cmd, &bi);
+        comp.record(cmd, tj, 0, 0);
+        vkEndCommandBuffer(cmd);
+        const uint64_t v = tl.reserve();
+        const VkSemaphoreSubmitInfo sig = gpu::VkEngine::timelineSignal(
+            tl, v, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        gpu::VkEngine::SubmitDesc sd;
+        sd.cmd = cmd;
+        sd.signalInfos = {&sig, 1};
+        REQUIRE(eng.submit(eng.gfx(), sd) == VK_SUCCESS);
+        REQUIRE(tl.waitCompleted(v, 2'000'000'000));
+        return comp.readbackPtr(0);
+    };
+    auto baseJob = [&]() {
+        gpu::Compositor::TickJob tj;
+        tj.a = progFrame.get();
+        tj.b = progFrame.get();
+        tj.mvInputs.push_back({progFrame.get()});
+        return tj;
+    };
+    // PGM tile center of the 64x36 multiview.
+    auto pgm = [&](const uint8_t* rb) { return rb + (size_t(12) * mvW + 16) * 4; };
+
+    {  // straight: mix(red, green, 0.502) ~= (95, 96, 0)
+        auto tj = baseJob();
+        tj.dsk[0] = keyStraight.get();
+        tj.sw.dskLevel[0] = 1.f;
+        const uint8_t* p = pgm(run(tj));
+        INFO(int(p[0]) << "," << int(p[1]) << "," << int(p[2]));
+        CHECK(near(p[0], 95, 12));
+        CHECK(near(p[1], 96, 12));
+        CHECK(near(p[2], 0, 12));
+    }
+    {  // premultiplied: green + red*(1-a) ~= (95, 191, 0)
+        auto tj = baseJob();
+        tj.dsk[0] = keyPremult.get();
+        tj.sw.dskLevel[0] = 1.f;
+        const uint8_t* p = pgm(run(tj));
+        INFO(int(p[0]) << "," << int(p[1]) << "," << int(p[2]));
+        CHECK(near(p[0], 95, 12));
+        CHECK(near(p[1], 191, 12));
+        CHECK(near(p[2], 0, 12));
+    }
+    {  // no-alpha source keys fully opaque -> green
+        auto tj = baseJob();
+        tj.dsk[1] = keyOpaque.get();
+        tj.sw.dskLevel[1] = 1.f;
+        const uint8_t* p = pgm(run(tj));
+        INFO(int(p[0]) << "," << int(p[1]) << "," << int(p[2]));
+        CHECK(near(p[0], 0, 12));
+        CHECK(near(p[1], 191, 12));
+        CHECK(near(p[2], 0, 12));
+    }
+    {  // half level on the opaque source: mix(red, green, 0.5)
+        auto tj = baseJob();
+        tj.dsk[1] = keyOpaque.get();
+        tj.sw.dskLevel[1] = 0.5f;
+        const uint8_t* p = pgm(run(tj));
+        CHECK(near(p[0], 96, 12));
+        CHECK(near(p[1], 96, 12));
+    }
+    {  // FTB=1 with a keyer on: everything black (keyers under FTB)
+        auto tj = baseJob();
+        tj.dsk[0] = keyStraight.get();
+        tj.sw.dskLevel[0] = 1.f;
+        tj.sw.ftb = 1.f;
+        const uint8_t* p = pgm(run(tj));
+        CHECK(near(p[0], 0, 6));
+        CHECK(near(p[1], 0, 6));
+        CHECK(near(p[2], 0, 6));
+    }
+
+    vkDestroyCommandPool(eng.device(), pool, nullptr);
+    eng.destroyTimeline(tl);
+}

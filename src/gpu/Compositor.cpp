@@ -1,6 +1,7 @@
 #include "gpu/Compositor.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 #include "core/Log.h"
@@ -18,6 +19,17 @@ struct Compositor::CompositePC {
     float aMap[4], bMap[4];
     float alpha, softness, ftb;
     int32_t transType, aCm, bCm;
+    // Downstream keyers. flags: bit0 NV12, bit1 alpha plane, bit2
+    // premultiplied, bit3 BT.601. vec4 maps sit at offsets 96/128
+    // (16-aligned, matching the GLSL std430 push-constant block).
+    int32_t k1Flags;
+    float k1Level;
+    float k1Map[4];
+    int32_t k1FullW, k1FullH;
+    int32_t k2Flags;
+    float k2Level;
+    float k2Map[4];
+    int32_t k2FullW, k2FullH;
 };
 struct Compositor::TilePC {
     int32_t ox, oy, dw, dh, sw, sh, padX, padY;
@@ -64,8 +76,20 @@ constexpr int kBorder = 3;
 Compositor::Compositor(VkEngine& eng, const VideoFormatDesc& show, int mvW,
                        int mvH, int numInputs)
     : eng_(eng), show_(show), mvW_(mvW & ~1), mvH_(mvH & ~1), numInputs_(numInputs) {
-    static_assert(sizeof(CompositePC) == 88);
+    static_assert(sizeof(CompositePC) == 152);
     static_assert(sizeof(TilePC) == 56);
+    // 152 exceeds the 128-byte Vulkan minimum; NVIDIA guarantees 256. Fail
+    // loudly on anything smaller rather than truncating the block.
+    {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(eng_.physical(), &props);
+        if (props.limits.maxPushConstantsSize < sizeof(CompositePC)) {
+            MOO_LOGE("maxPushConstantsSize %u < CompositePC %zu -- unsupported "
+                     "device",
+                     props.limits.maxPushConstantsSize, sizeof(CompositePC));
+            std::abort();
+        }
+    }
     static_assert(sizeof(PackPC) == 16);
     static_assert(sizeof(ProxyPC) == 24);
 
@@ -113,7 +137,11 @@ Compositor::Compositor(VkEngine& eng, const VideoFormatDesc& show, int mvW,
                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                           VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                           VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
                           sizeof(CompositePC));
     tile_ = makePipe(shaders::multiview_tile_comp, shaders::multiview_tile_comp_size,
                      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -392,7 +420,18 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
                                   job.b->viewUV() ? job.b->viewUV() : job.b->view(),
                                   VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorImageInfo pInfo{VK_NULL_HANDLE, prog.view, VK_IMAGE_LAYOUT_GENERAL};
-    VkWriteDescriptorSet w[5] = {};
+    // Keyers: aux = NV12 UV | UYVA alpha | self-rebound fill (never NULL,
+    // same pattern as the UV slots above). Dark keyer falls back to job.a.
+    VkDescriptorImageInfo kInfo[kDskCount], kAuxInfo[kDskCount];
+    for (int k = 0; k < kDskCount; ++k) {
+        const GpuFrame* f = job.dsk[k] ? job.dsk[k] : job.a;
+        VkImageView aux = f->viewUV() ? f->viewUV()
+                          : f->viewA() ? f->viewA()
+                                       : f->view();
+        kInfo[k] = {eng_.linearSampler(), f->view(), VK_IMAGE_LAYOUT_GENERAL};
+        kAuxInfo[k] = {eng_.linearSampler(), aux, VK_IMAGE_LAYOUT_GENERAL};
+    }
+    VkWriteDescriptorSet w[9] = {};
     w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &aInfo, nullptr, nullptr};
     w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 1, 0, 1,
@@ -403,8 +442,16 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bUvInfo, nullptr, nullptr};
     w[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 4, 0, 1,
             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &pInfo, nullptr, nullptr};
+    w[5] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 5, 0, 1,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &kInfo[0], nullptr, nullptr};
+    w[6] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 6, 0, 1,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &kAuxInfo[0], nullptr, nullptr};
+    w[7] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 7, 0, 1,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &kInfo[1], nullptr, nullptr};
+    w[8] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 8, 0, 1,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &kAuxInfo[1], nullptr, nullptr};
     eng_.cmdPushDescriptorSet(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, composite_.layout,
-                              0, 5, w);
+                              0, 9, w);
     CompositePC cpc{};
     cpc.aFmt = job.a->isNv12() ? 1 : 0;
     cpc.bFmt = job.b->isNv12() ? 1 : 0;
@@ -422,6 +469,19 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
     cpc.transType = int32_t(job.sw.trans);
     cpc.aCm = job.a->desc.colorimetry == Colorimetry::BT601 ? 1 : 0;
     cpc.bCm = job.b->desc.colorimetry == Colorimetry::BT601 ? 1 : 0;
+    auto keyPc = [&](int k, int32_t& flags, float& level, float* map,
+                     int32_t& fw, int32_t& fh) {
+        const GpuFrame* f = job.dsk[k] ? job.dsk[k] : job.a;
+        flags = (f->isNv12() ? 1 : 0) | (f->viewA() ? 2 : 0) |
+                (f->premult ? 4 : 0) |
+                (f->desc.colorimetry == Colorimetry::BT601 ? 8 : 0);
+        level = job.dsk[k] ? job.sw.dskLevel[k] : 0.f;
+        fw = f->desc.width;
+        fh = f->desc.height;
+        fitMap(fw, fh, cpc.outW, cpc.outH, map);
+    };
+    keyPc(0, cpc.k1Flags, cpc.k1Level, cpc.k1Map, cpc.k1FullW, cpc.k1FullH);
+    keyPc(1, cpc.k2Flags, cpc.k2Level, cpc.k2Map, cpc.k2FullW, cpc.k2FullH);
     vkCmdPushConstants(cmd, composite_.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                        sizeof(cpc), &cpc);
     vkCmdDispatch(cmd, uint32_t((show_.width + 15) / 16),
@@ -554,7 +614,8 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
     for (int i = 0; i < numInputs_; ++i) {
-        if (i == job.tallyPgmA || i == job.tallyPgmB)
+        if (i == job.tallyPgmA || i == job.tallyPgmB ||
+            i == job.tallyDsk[0] || i == job.tallyDsk[1])
             borderTiles(cmd, i * cellW, rowY, cellW, rowH, kTallyRed, fif);
         else if (i == job.tallyPvw)
             borderTiles(cmd, i * cellW, rowY, cellW, rowH, kTallyGreen, fif);
