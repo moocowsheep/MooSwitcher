@@ -204,6 +204,52 @@ inline void bakeMovingBar(uint8_t* buf, int strideBytes, int W, int H, int slot,
                  128, 128);
 }
 
+// --- UYVA (testgen --uyva): full-res alpha plane appended after the packed
+// UYVY rows. Strip band (rows < kPatternTop) is opaque so counter/flash stay
+// machine-readable through a keyer; a fixed lower-third band with soft edge
+// ramps is the keyed graphic; everything else is transparent. Fixed geometry
+// keeps keyed-output pixel asserts deterministic (the moving bar animates
+// inside the band).
+constexpr int kAlphaRampH = 24;
+inline int alphaBandY0(int H) { return (H * 70 / 100) & ~1; }
+inline int alphaBandH(int H) { return (H * 15 / 100) & ~1; }
+
+inline void bakeAlphaPlane(uint8_t* buf, int strideBytes, int W, int H) {
+    uint8_t* a = buf + size_t(strideBytes) * H;
+    memset(a, 0, size_t(W) * H);
+    memset(a, 0xFF, size_t(W) * size_t(std::min(H, kPatternTop)));
+    const int y0 = alphaBandY0(H);
+    const int y1 = std::min(y0 + alphaBandH(H), H);
+    for (int y = y0; y < y1; ++y) {
+        int v = 255;
+        const int dTop = y - y0, dBot = y1 - 1 - y;
+        if (dTop < kAlphaRampH) v = 255 * (dTop + 1) / (kAlphaRampH + 1);
+        else if (dBot < kAlphaRampH) v = 255 * (dBot + 1) / (kAlphaRampH + 1);
+        memset(a + size_t(y) * W, uint8_t(v), size_t(W));
+    }
+}
+
+// Premultiply the UYVY plane by the alpha plane, limited-range (Y toward 16,
+// chroma toward 128; shared chroma uses the pixel-pair mean alpha). Bake-time
+// only: per-send strip stamping lands in the opaque band where this is
+// identity.
+inline void premultiplyUyva(uint8_t* buf, int strideBytes, int W, int H) {
+    const uint8_t* a = buf + size_t(strideBytes) * H;
+    for (int y = 0; y < H; ++y) {
+        uint8_t* row = buf + size_t(y) * strideBytes;
+        const uint8_t* ar = a + size_t(y) * W;
+        for (int x = 0; x < W; x += 2) {
+            const int a0 = ar[x], a1 = ar[x + 1], ac = (a0 + a1) / 2;
+            if (a0 == 255 && a1 == 255) continue;
+            uint8_t* m = row + size_t(x) * 2;  // U Y0 V Y1
+            m[0] = uint8_t(128 + (int(m[0]) - 128) * ac / 255);
+            m[1] = uint8_t(16 + (int(m[1]) - 16) * a0 / 255);
+            m[2] = uint8_t(128 + (int(m[2]) - 128) * ac / 255);
+            m[3] = uint8_t(16 + (int(m[3]) - 16) * a1 / 255);
+        }
+    }
+}
+
 // Exact sample index of tick n at 48 kHz for an fpsN/fpsD clock.
 inline int64_t sampleForTick(int64_t n, int64_t fpsN, int64_t fpsD) {
     return n * kSampleRate * fpsD / fpsN;  // exact for broadcast rates

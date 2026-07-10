@@ -42,6 +42,8 @@ struct Options {
     bool noise = false;  // worst-case codec content instead of bars
     bool mid = false;    // mid-entropy content (random flat 8x8 blocks)
     bool omt = false;    // send via OMT (VMX) instead of NDI
+    bool uyva = false;    // append an alpha plane (lower-third key graphic)
+    bool premult = false; // premultiply fill by alpha (OMT signals the flag)
 };
 
 bool parseFps(const std::string& s, int64_t& n, int64_t& d) {
@@ -96,13 +98,21 @@ bool parseArgs(int argc, char** argv, Options& o) {
             fprintf(stderr, "built without OMT support\n");
             return false;
 #endif
+        } else if (a == "--uyva") {
+            o.uyva = true;
+        } else if (a == "--premult") {
+            o.uyva = true;
+            o.premult = true;
         } else if (a == "--quiet") {
             o.quiet = true;
         } else {
             fprintf(stderr,
                     "usage: moo-testgen [--name S] [--size WxH] [--fps N/D|F]\n"
                     "                   [--precompute K] [--duration SECS]\n"
-                    "                   [--no-audio] [--noise] [--mid] [--omt] [--quiet]\n");
+                    "                   [--no-audio] [--noise] [--mid] [--omt]\n"
+                    "                   [--uyva] [--premult] [--quiet]\n"
+                    "  --uyva: alpha plane (lower-third band; strips opaque)\n"
+                    "  --premult: premultiplied fill (flag signaled on OMT only)\n");
             return false;
         }
     }
@@ -156,7 +166,9 @@ int main(int argc, char** argv) {
     }
 
     const int strideBytes = opt.width * 2;
-    const size_t frameBytes = size_t(strideBytes) * opt.height;
+    const size_t frameBytes =
+        size_t(strideBytes) * opt.height +
+        (opt.uyva ? size_t(opt.width) * opt.height : 0);
 
     // Precomputed frame ring: bars + moving bar baked per slot; strips and the
     // flash region get stamped per send. K >= 2 keeps the async-held buffer
@@ -181,6 +193,13 @@ int main(int argc, char** argv) {
         else
             pat::bakeMovingBar(slots[i].data(), strideBytes, opt.width,
                                opt.height, i, K);
+        if (opt.uyva) {
+            pat::bakeAlphaPlane(slots[i].data(), strideBytes, opt.width,
+                                opt.height);
+            if (opt.premult)
+                pat::premultiplyUyva(slots[i].data(), strideBytes, opt.width,
+                                     opt.height);
+        }
     }
 
     // Audio: stereo FLTP, chunk per video tick, tone burst after each flash.
@@ -198,7 +217,8 @@ int main(int argc, char** argv) {
     NDIlib_video_frame_v2_t vf{};
     vf.xres = opt.width;
     vf.yres = opt.height;
-    vf.FourCC = NDIlib_FourCC_video_type_UYVY;
+    vf.FourCC = opt.uyva ? NDIlib_FourCC_video_type_UYVA
+                         : NDIlib_FourCC_video_type_UYVY;
     vf.frame_rate_N = int(opt.fpsN);
     vf.frame_rate_D = int(opt.fpsD);
     vf.picture_aspect_ratio = 0;  // square pixels
@@ -231,7 +251,11 @@ int main(int argc, char** argv) {
 
             OMTMediaFrame ovf = {};
             ovf.Type = OMTFrameType_Video;
-            ovf.Codec = OMTCodec_UYVY;
+            ovf.Codec = opt.uyva ? OMTCodec_UYVA : OMTCodec_UYVY;
+            if (opt.uyva)  // without _Alpha libomt encodes plain UYVY
+                ovf.Flags = OMTVideoFlags(
+                    OMTVideoFlags_Alpha |
+                    (opt.premult ? OMTVideoFlags_PreMultiplied : 0));
             ovf.Width = opt.width;
             ovf.Height = opt.height;
             ovf.Stride = strideBytes;

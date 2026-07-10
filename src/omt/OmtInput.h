@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "core/Spsc.h"
 #include "engine/IInputSource.h"
@@ -57,6 +58,9 @@ private:
 
     omt_receive_t* recv_ = nullptr;  // capture-thread owned after ctor
     std::shared_ptr<gpu::UploadRing> ring_;
+    // Sticky-UYVA ring: slots whose staging alpha is already 0xFF (capture
+    // thread only; sized/reset on ring rebuild).
+    std::vector<uint8_t> slotAlphaOpaque_;
     Mailbox mailbox_;
     const int syncFrames_;
     SyncFeed feed_{16};

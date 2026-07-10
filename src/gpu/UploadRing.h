@@ -46,6 +46,9 @@ public:
     const Timeline& timeline() const { return tl_; }
     VkImageView view(int slot) const { return slots_[slot].image.view; }
     VkImage image(int slot) const { return slots_[slot].image.img; }
+    // Alpha plane view (UYVA rings only; VK_NULL_HANDLE otherwise).
+    VkImageView viewA(int slot) const { return slots_[slot].alpha.view; }
+    bool hasAlpha() const { return desc_.hasAlpha(); }
 
     void addRenderRef(int slot) { slots_[slot].renderRefs.fetch_add(1); }
     void releaseRenderRef(int slot) { slots_[slot].renderRefs.fetch_sub(1); }
@@ -54,6 +57,7 @@ private:
     struct Slot {
         Buffer staging;
         Image image;
+        Image alpha;  // R8 full-res, UYVA rings only
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         uint64_t lastSubmit = 0;
         bool imageInitialized = false;
@@ -77,10 +81,14 @@ struct GpuFrame {
     VideoFormatDesc desc;
     int slot = -1;
     uint64_t uploadValue = 0;
+    // Per-frame, not per-format: OMT signals premultiplied alpha frame by
+    // frame, and it must not force a ring rebuild.
+    bool premult = false;
     std::shared_ptr<UploadRing> uyvy;  // exactly one of these is set
     std::shared_ptr<Nv12Ring> nv12;
 
-    GpuFrame(std::shared_ptr<UploadRing> r, int s, uint64_t v);
+    GpuFrame(std::shared_ptr<UploadRing> r, int s, uint64_t v,
+             bool premultiplied = false);
     GpuFrame(std::shared_ptr<Nv12Ring> r, int s, uint64_t v);
     ~GpuFrame();
     GpuFrame(const GpuFrame&) = delete;
@@ -89,6 +97,7 @@ struct GpuFrame {
     bool isNv12() const { return nv12 != nullptr; }
     VkImageView view() const;    // packed UYVY, or the NV12 Y plane
     VkImageView viewUV() const;  // NV12 CbCr plane; VK_NULL_HANDLE otherwise
+    VkImageView viewA() const;   // UYVA alpha plane; VK_NULL_HANDLE otherwise
     const Timeline& timeline() const;
     bool uploaded() const { return timeline().completed() >= uploadValue; }
 };

@@ -69,6 +69,10 @@ void NdiReceiver::run(std::stop_token st) {
 
     int64_t lastVideoNs = 0;
     bool everConnected = false;
+    // Sticky-UYVA eligibility is per connection: alternation within one
+    // connection keeps the alpha ring; a reconnect that comes back plain
+    // UYVY downgrades (frees the alpha images/staging).
+    bool alphaThisConn = false;
 
     // Frame-sync pts state. Sender timestamps are the pts source of truth
     // (deltas only -- they ride the sender's NTP-slewed realtime clock);
@@ -101,6 +105,7 @@ void NdiReceiver::run(std::stop_token st) {
             badCadence = 0;
             haveSrcTs = false;
             synthK = 0;
+            alphaThisConn = false;
             MOO_LOGI("in%d: connecting to '%s'", index_, src->name.c_str());
         }
 
@@ -163,20 +168,38 @@ void NdiReceiver::run(std::stop_token st) {
                 continue;
             }
 
+            const bool incomingAlpha =
+                vf.FourCC == NDIlib_FourCC_video_type_UYVA;
+
             VideoFormatDesc d;
             d.width = vf.xres;
             d.height = vf.yres;
             d.fpsN = vf.frame_rate_N;
             d.fpsD = vf.frame_rate_D;
+            d.pixfmt = incomingAlpha ? PixFmt::UYVA8_4224 : PixFmt::UYVY8_422;
             d.colorimetry = VideoFormatDesc::colorimetryForHeight(vf.yres);
 
+            // Sticky-UYVA: title generators alternate UYVY/UYVA with content;
+            // once this geometry delivered alpha, keep the UYVA ring (UYVY
+            // frames get opaque alpha below) instead of thrashing rebuilds.
+            // Downgrade happens only via reconnect or a geometry change.
+            if (incomingAlpha) alphaThisConn = true;
+            if (!incomingAlpha && alphaThisConn && ring_ &&
+                ring_->desc().hasAlpha()) {
+                VideoFormatDesc sticky = d;
+                sticky.pixfmt = PixFmt::UYVA8_4224;
+                if (ring_->desc() == sticky) d = sticky;
+            }
+
             if (!ring_ || !(ring_->desc() == d)) {
-                MOO_LOGI("in%d: format %dx%d @ %d/%d", index_, d.width, d.height,
-                         vf.frame_rate_N, vf.frame_rate_D);
+                MOO_LOGI("in%d: format %dx%d @ %d/%d%s", index_, d.width,
+                         d.height, vf.frame_rate_N, vf.frame_rate_D,
+                         d.hasAlpha() ? " +alpha" : "");
                 const int slots =
                     gpu::UploadRing::kSlots +
                     (syncFrames_ >= 0 ? syncFrames_ + 2 : 0);
                 ring_ = std::make_shared<gpu::UploadRing>(eng_, d, queue_, slots);
+                slotAlphaOpaque_.assign(size_t(slots), 0);
                 std::lock_guard lk(descM_);
                 desc_ = d;
             }
@@ -193,11 +216,36 @@ void NdiReceiver::run(std::stop_token st) {
             uint8_t* dst = ring_->stagingPtr(slot);
             const uint8_t* src = vf.p_data;
             if (size_t(vf.line_stride_in_bytes) == dstStride) {
-                memcpy(dst, src, dstStride * size_t(d.height));  // UYVA: alpha plane ignored
+                memcpy(dst, src, dstStride * size_t(d.height));
             } else {
                 for (int y = 0; y < d.height; ++y)
                     memcpy(dst + size_t(y) * dstStride,
                            src + size_t(y) * vf.line_stride_in_bytes, dstStride);
+            }
+            if (d.hasAlpha()) {
+                uint8_t* adst = dst + d.alphaOffset();
+                if (incomingAlpha) {
+                    // UYVA appends a full-res alpha plane after the UYVY
+                    // rows; its stride is half the UYVY stride (1 B/px vs
+                    // 2 -- undocumented, validated by testgen loopback).
+                    const uint8_t* asrc =
+                        src + size_t(vf.line_stride_in_bytes) * d.height;
+                    const size_t aSrc = size_t(vf.line_stride_in_bytes) / 2;
+                    const size_t aDst = size_t(d.width);
+                    if (aSrc == aDst) {
+                        memcpy(adst, asrc, aDst * size_t(d.height));
+                    } else {
+                        for (int y = 0; y < d.height; ++y)
+                            memcpy(adst + size_t(y) * aDst,
+                                   asrc + size_t(y) * aSrc, aDst);
+                    }
+                    slotAlphaOpaque_[size_t(slot)] = 0;
+                } else if (!slotAlphaOpaque_[size_t(slot)]) {
+                    // Plain UYVY into a sticky-UYVA ring: opaque, once per
+                    // slot until real alpha lands in it again.
+                    memset(adst, 0xFF, size_t(d.width) * size_t(d.height));
+                    slotAlphaOpaque_[size_t(slot)] = 1;
+                }
             }
             const uint64_t value = ring_->submit(slot);
             const int64_t senderTsNs =

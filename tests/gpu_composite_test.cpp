@@ -144,3 +144,49 @@ TEST_CASE("composite + multiview convert BT.709 UYVY to expected RGB") {
     frame.reset();
     ring.reset();
 }
+
+TEST_CASE("UYVA upload ring carries the alpha plane") {
+    GpuFixture fx;
+    if (!fx.ok) SKIP("no Vulkan device");
+    auto& eng = fx.eng;
+
+    VideoFormatDesc d;
+    d.width = 64;
+    d.height = 36;
+    d.pixfmt = PixFmt::UYVA8_4224;
+    REQUIRE(d.frameBytes() == size_t(64) * 36 * 3);
+    REQUIRE(d.alphaOffset() == size_t(64) * 2 * 36);
+
+    auto ring = std::make_shared<gpu::UploadRing>(eng, d, eng.xferUp());
+    REQUIRE(ring->hasAlpha());
+    const int slot = ring->acquire();
+    REQUIRE(slot >= 0);
+    pattern::fillRectUYVY(ring->stagingPtr(slot), int(d.rowBytes()), 0, 0,
+                          d.width, d.height, 51, 109, 212);
+    memset(ring->stagingPtr(slot) + d.alphaOffset(), 0x80,
+           size_t(d.width) * d.height);
+    const uint64_t upVal = ring->submit(slot);
+    REQUIRE(ring->timeline().waitCompleted(upVal, 1'000'000'000));
+
+    auto frame =
+        std::make_shared<const gpu::GpuFrame>(ring, slot, upVal, true);
+    CHECK(frame->viewA() != VK_NULL_HANDLE);
+    CHECK(frame->viewUV() == VK_NULL_HANDLE);
+    CHECK(frame->premult);
+    CHECK(frame->desc.hasAlpha());
+
+    // Plain UYVY ring: no alpha view, premult defaults false.
+    VideoFormatDesc d2 = d;
+    d2.pixfmt = PixFmt::UYVY8_422;
+    auto ring2 = std::make_shared<gpu::UploadRing>(eng, d2, eng.xferUp());
+    REQUIRE_FALSE(ring2->hasAlpha());
+    const int slot2 = ring2->acquire();
+    REQUIRE(slot2 >= 0);
+    pattern::fillRectUYVY(ring2->stagingPtr(slot2), int(d2.rowBytes()), 0, 0,
+                          d2.width, d2.height, 51, 109, 212);
+    const uint64_t upVal2 = ring2->submit(slot2);
+    REQUIRE(ring2->timeline().waitCompleted(upVal2, 1'000'000'000));
+    auto frame2 = std::make_shared<const gpu::GpuFrame>(ring2, slot2, upVal2);
+    CHECK(frame2->viewA() == VK_NULL_HANDLE);
+    CHECK_FALSE(frame2->premult);
+}

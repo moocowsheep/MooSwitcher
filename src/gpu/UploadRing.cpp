@@ -5,8 +5,10 @@
 
 namespace moo::gpu {
 
-GpuFrame::GpuFrame(std::shared_ptr<UploadRing> r, int s, uint64_t v)
-    : desc(r->desc()), slot(s), uploadValue(v), uyvy(std::move(r)) {
+GpuFrame::GpuFrame(std::shared_ptr<UploadRing> r, int s, uint64_t v,
+                   bool premultiplied)
+    : desc(r->desc()), slot(s), uploadValue(v), premult(premultiplied),
+      uyvy(std::move(r)) {
     uyvy->addRenderRef(slot);
 }
 
@@ -26,6 +28,10 @@ VkImageView GpuFrame::view() const {
 
 VkImageView GpuFrame::viewUV() const {
     return nv12 ? nv12->viewUV(slot) : VK_NULL_HANDLE;
+}
+
+VkImageView GpuFrame::viewA() const {
+    return uyvy ? uyvy->viewA(slot) : VK_NULL_HANDLE;
 }
 
 const Timeline& GpuFrame::timeline() const {
@@ -55,6 +61,10 @@ UploadRing::UploadRing(VkEngine& eng, const VideoFormatDesc& desc, Queue& xferQu
         s.image = eng_.createImage2D(
             uint32_t(desc_.width / 2), uint32_t(desc_.height), VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        if (desc_.hasAlpha())
+            s.alpha = eng_.createImage2D(
+                uint32_t(desc_.width), uint32_t(desc_.height), VK_FORMAT_R8_UNORM,
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         vkAllocateCommandBuffers(eng_.device(), &cai, &s.cmd);
     }
 }
@@ -66,6 +76,7 @@ UploadRing::~UploadRing() {
     for (int i = 0; i < nSlots_; ++i) {
         eng_.destroyBuffer(slots_[i].staging);
         eng_.destroyImage(slots_[i].image);
+        eng_.destroyImage(slots_[i].alpha);  // null-safe when absent
     }
     if (pool_) vkDestroyCommandPool(eng_.device(), pool_, nullptr);
     eng_.destroyTimeline(tl_);
@@ -93,17 +104,22 @@ uint64_t UploadRing::submit(int slot) {
 
     // Everything lives in GENERAL; transition once on first use.
     if (!s.imageInitialized) {
-        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-        b.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-        b.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-        b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        b.image = s.image.img;
-        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkImageMemoryBarrier2 b[2] = {};
+        uint32_t nb = s.alpha.img ? 2u : 1u;
+        for (uint32_t i = 0; i < nb; ++i) {
+            b[i] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            b[i].srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+            b[i].dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+            b[i].dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            b[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        }
+        b[0].image = s.image.img;
+        if (s.alpha.img) b[1].image = s.alpha.img;
         VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        di.imageMemoryBarrierCount = 1;
-        di.pImageMemoryBarriers = &b;
+        di.imageMemoryBarrierCount = nb;
+        di.pImageMemoryBarriers = b;
         vkCmdPipelineBarrier2(s.cmd, &di);
         s.imageInitialized = true;
     }
@@ -118,6 +134,22 @@ uint64_t UploadRing::submit(int slot) {
     ci.regionCount = 1;
     ci.pRegions = &region;
     vkCmdCopyBufferToImage2(s.cmd, &ci);
+
+    if (s.alpha.img) {
+        // Appended full-res alpha plane (see VideoFormatDesc::alphaOffset).
+        VkBufferImageCopy2 ar{VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2};
+        ar.bufferOffset = desc_.alphaOffset();
+        ar.bufferRowLength = uint32_t(desc_.width);  // texels of R8
+        ar.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        ar.imageExtent = {uint32_t(desc_.width), uint32_t(desc_.height), 1};
+        VkCopyBufferToImageInfo2 ac{VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2};
+        ac.srcBuffer = s.staging.buf;
+        ac.dstImage = s.alpha.img;
+        ac.dstImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ac.regionCount = 1;
+        ac.pRegions = &ar;
+        vkCmdCopyBufferToImage2(s.cmd, &ac);
+    }
     vkEndCommandBuffer(s.cmd);
 
     const uint64_t value = tl_.reserve();

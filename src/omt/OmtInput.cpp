@@ -48,6 +48,8 @@ void OmtInput::run(std::stop_token st) {
 
     int64_t lastVideoNs = MediaClock::nowNs();
     bool everConnected = false;
+    // Sticky-UYVA eligibility is per connection (see NdiReceiver).
+    bool alphaThisConn = false;
 
     // Frame-sync pts state, same policy as NdiReceiver: sender timestamps
     // (100 ns units) are the pts source of truth, deltas only; absent or
@@ -79,7 +81,7 @@ void OmtInput::run(std::stop_token st) {
         if (!recv_) {
             recv_ = omt_receive_create(
                 ref_.c_str(), OMTFrameType(OMTFrameType_Video | OMTFrameType_Audio),
-                OMTPreferredVideoFormat_UYVY, OMTReceiveFlags_None);
+                OMTPreferredVideoFormat_UYVYorUYVA, OMTReceiveFlags_None);
             if (!recv_) {
                 MOO_LOGE("in%d(omt): receive_create('%s') failed", index_,
                          ref_.c_str());
@@ -93,6 +95,7 @@ void OmtInput::run(std::stop_token st) {
             badCadence = 0;
             haveSrcTs = false;
             synthK = 0;
+            alphaThisConn = false;
             MOO_LOGI("in%d(omt): connecting to '%s'", index_, ref_.c_str());
         }
 
@@ -136,9 +139,14 @@ void OmtInput::run(std::stop_token st) {
         if (fr->Type != OMTFrameType_Video) continue;  // audio handled above
 
         lastVideoNs = MediaClock::nowNs();
-        if (fr->Codec != OMTCodec_UYVY || fr->Width <= 0 || fr->Height <= 0 ||
-            !fr->Data)
-            continue;  // preferred-format promises UYVY for non-alpha senders
+        if ((fr->Codec != OMTCodec_UYVY && fr->Codec != OMTCodec_UYVA) ||
+            fr->Width <= 0 || fr->Height <= 0 || !fr->Data)
+            continue;  // preferred-format promises UYVY/UYVA
+        // Defensive: a UYVA frame must actually carry both planes.
+        const bool incomingAlpha =
+            fr->Codec == OMTCodec_UYVA &&
+            size_t(fr->DataLength) >= size_t(fr->Stride) * size_t(fr->Height) +
+                                          size_t(fr->Width) * size_t(fr->Height);
         if (!everConnected || !connected_.load(std::memory_order_relaxed)) {
             connected_.store(true, std::memory_order_relaxed);
             everConnected = true;
@@ -149,14 +157,26 @@ void OmtInput::run(std::stop_token st) {
         d.height = fr->Height;
         d.fpsN = fr->FrameRateN;
         d.fpsD = fr->FrameRateD;
+        d.pixfmt = incomingAlpha ? PixFmt::UYVA8_4224 : PixFmt::UYVY8_422;
         d.colorimetry = VideoFormatDesc::colorimetryForHeight(fr->Height);
 
+        // Sticky-UYVA: keep the alpha ring across interleaved UYVY frames
+        // (same policy and rationale as NdiReceiver).
+        if (incomingAlpha) alphaThisConn = true;
+        if (!incomingAlpha && alphaThisConn && ring_ &&
+            ring_->desc().hasAlpha()) {
+            VideoFormatDesc sticky = d;
+            sticky.pixfmt = PixFmt::UYVA8_4224;
+            if (ring_->desc() == sticky) d = sticky;
+        }
+
         if (!ring_ || !(ring_->desc() == d)) {
-            MOO_LOGI("in%d(omt): format %dx%d @ %d/%d", index_, d.width,
-                     d.height, d.fpsN, d.fpsD);
+            MOO_LOGI("in%d(omt): format %dx%d @ %d/%d%s", index_, d.width,
+                     d.height, d.fpsN, d.fpsD, d.hasAlpha() ? " +alpha" : "");
             const int slots = gpu::UploadRing::kSlots +
                               (syncFrames_ >= 0 ? syncFrames_ + 2 : 0);
             ring_ = std::make_shared<gpu::UploadRing>(eng_, d, queue_, slots);
+            slotAlphaOpaque_.assign(size_t(slots), 0);
             std::lock_guard lk(descM_);
             desc_ = d;
         }
@@ -178,10 +198,34 @@ void OmtInput::run(std::stop_token st) {
                 memcpy(dst + size_t(y) * dstStride,
                        src + size_t(y) * size_t(fr->Stride), dstStride);
         }
+        if (d.hasAlpha()) {
+            uint8_t* adst = dst + d.alphaOffset();
+            if (incomingAlpha) {
+                // libomt decodes UYVA at Stride = width*2 with the packed
+                // alpha plane appended (OMTReceive.cs / VMX_DecodeUYVA).
+                const uint8_t* asrc = src + size_t(fr->Stride) * d.height;
+                const size_t aSrc = size_t(fr->Stride) / 2;
+                const size_t aDst = size_t(d.width);
+                if (aSrc == aDst) {
+                    memcpy(adst, asrc, aDst * size_t(d.height));
+                } else {
+                    for (int y = 0; y < d.height; ++y)
+                        memcpy(adst + size_t(y) * aDst,
+                               asrc + size_t(y) * aSrc, aDst);
+                }
+                slotAlphaOpaque_[size_t(slot)] = 0;
+            } else if (!slotAlphaOpaque_[size_t(slot)]) {
+                memset(adst, 0xFF, size_t(d.width) * size_t(d.height));
+                slotAlphaOpaque_[size_t(slot)] = 1;
+            }
+        }
         const uint64_t value = ring_->submit(slot);
         const int64_t senderTsNs = fr->Timestamp >= 0 ? fr->Timestamp * 100 : -1;
 
-        auto frame = std::make_shared<const gpu::GpuFrame>(ring_, slot, value);
+        const bool premult =
+            incomingAlpha && (fr->Flags & OMTVideoFlags_PreMultiplied) != 0;
+        auto frame =
+            std::make_shared<const gpu::GpuFrame>(ring_, slot, value, premult);
         mailbox_.publish(frame);
         if (syncFrames_ >= 0) {
             const int64_t arrNs = lastVideoNs;  // receive-return time
