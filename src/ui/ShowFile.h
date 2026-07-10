@@ -22,6 +22,14 @@ public:
         bool operator==(const ChannelState&) const = default;
     };
 
+    struct DskState {
+        int source = 0;
+        int fadeDurTicks = 30;
+        bool on = false;
+
+        bool operator==(const DskState&) const = default;
+    };
+
     struct State {
         EngineConfig cfg;
         int program = 0;
@@ -29,11 +37,13 @@ public:
         int transType = 0;
         int transDurTicks = 30;
         std::vector<ChannelState> chans;
+        DskState dsk[kDskCount];
 
         bool operator==(const State& o) const {
             return program == o.program && preview == o.preview &&
                    transType == o.transType && transDurTicks == o.transDurTicks &&
-                   chans == o.chans && cfgEquals(cfg, o.cfg);
+                   chans == o.chans && dsk[0] == o.dsk[0] && dsk[1] == o.dsk[1] &&
+                   cfgEquals(cfg, o.cfg);
         }
 
     private:

@@ -116,7 +116,8 @@ void EngineBridge::poll() {
     }
 
     const auto st = engine_.uiState();
-    emit stateChanged(st.program, st.preview, st.inTransition, st.ftbEngaged);
+    emit stateChanged(st.program, st.preview, st.inTransition, st.ftbEngaged,
+                      st.dskOn[0], st.dskOn[1]);
 
     QStringList refs;
     for (int i = 0; i < engine_.inputCount(); ++i)

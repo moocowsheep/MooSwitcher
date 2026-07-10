@@ -26,7 +26,8 @@ public:
     void saveShow();  // also called from aboutToQuit
 
 private:
-    void onState(int program, int preview, bool inTransition, bool ftb);
+    void onState(int program, int preview, bool inTransition, bool ftb,
+                 bool dsk1, bool dsk2);
     void onInputNames(const QStringList& refs);
     void pushTransition();
     ShowFile::State collectState() const;
@@ -44,8 +45,12 @@ private:
     QSlider* tbar_ = nullptr;
     QComboBox* transType_ = nullptr;
     QSpinBox* transDur_ = nullptr;
+    QPushButton* dskBtns_[kDskCount] = {nullptr, nullptr};
+    QComboBox* dskSrc_[kDskCount] = {nullptr, nullptr};
+    QSpinBox* dskFade_[kDskCount] = {nullptr, nullptr};
     int lastProgram_ = -1, lastPreview_ = -1;
     bool lastFtb_ = false;
+    bool lastDskOn_[kDskCount] = {false, false};
 };
 
 }  // namespace moo::ui

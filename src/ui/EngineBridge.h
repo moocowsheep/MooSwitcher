@@ -28,6 +28,13 @@ public slots:
     void setTransition(int type, int durationTicks, float softness) {
         engine_.post({Command::Type::SetTransition, type, durationTicks, softness});
     }
+    void dskToggle(int k) { engine_.post({Command::Type::DskToggle, k, 0, 0.f}); }
+    void setDskSource(int k, int src) {
+        engine_.post({Command::Type::SetDskSource, k, src, 0.f});
+    }
+    void setDskFade(int k, int ticks) {
+        engine_.post({Command::Type::SetDskFade, k, ticks, 0.f});
+    }
 
     // Audio mixer controls: straight to the mixer atomics (thread-safe).
     void setAudioGain(int input, float linearGain);
@@ -61,7 +68,8 @@ public:
 signals:
     void multiviewFrame(QImage frame);
     void statusText(QString text);
-    void stateChanged(int program, int preview, bool inTransition, bool ftb);
+    void stateChanged(int program, int preview, bool inTransition, bool ftb,
+                      bool dsk1, bool dsk2);
     void audioLevels(QList<float> lr);  // per input L,R ... then master L,R
     void inputNamesChanged(QStringList refs);
     void healthChanged(QStringList problems);  // empty = all good

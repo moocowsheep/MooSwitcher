@@ -46,7 +46,15 @@ name substring. The same dialog sets the input's frame sync (Off / Trim only /
 1–4 frames; headless: `--framesync IDX[:FRAMES]`). Use 1 frame for free-running cameras
 you switch between often (constant A/V at +1 frame latency); Trim only suits audio-early
 sources like SRT loopbacks. Shortcuts: `Space` cut, `Enter` auto, `F` FTB, `1–9` program,
-`Shift+1–9` preview.
+`Shift+1–9` preview, `D`/`Shift+D` DSK 1/2.
+
+Two downstream keyers composite graphics with **native alpha (NDI/OMT UYVA)** over program —
+point a DSK at an input carrying alpha (CasparCG, OBS with alpha, `moo-testgen --uyva`), and
+toggle it on; it fades over its own duration, independent of transitions, and FTB takes it
+out with everything else. A source without alpha keys fully opaque (a fadeable fullscreen
+overlay). Headless: `--dsk K:SRC --dsk-fade K:TICKS --dsk-toggle-after S:K`. Design:
+`docs/design-dsk.md`; measurements: `docs/bench-dsk.md` (an 8K UYVA key over an 8K program
+holds full rate; keyers-off cost is nil).
 
 ## Build
 

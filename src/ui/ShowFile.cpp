@@ -5,6 +5,8 @@
 #include <QSettings>
 #include <QStandardPaths>
 
+#include <algorithm>
+
 namespace moo::ui {
 
 bool ShowFile::State::cfgEquals(const EngineConfig& a, const EngineConfig& b) {
@@ -87,6 +89,19 @@ bool ShowFile::load(State& st) const {
         ch.delayMs = s.value("delayMs", ch.delayMs).toInt();
     }
     s.endArray();
+
+    // Absent in pre-DSK show files -> defaults (off).
+    const int nd = s.beginReadArray(QStringLiteral("dsk"));
+    for (int i = 0; i < nd && i < kDskCount; ++i) {
+        s.setArrayIndex(i);
+        auto& d = st.dsk[i];
+        d.source = std::clamp(s.value("source", d.source).toInt(), 0,
+                              std::max(0, int(st.cfg.inputs.size()) - 1));
+        d.fadeDurTicks =
+            std::clamp(s.value("fadeDurTicks", d.fadeDurTicks).toInt(), 1, 600);
+        d.on = s.value("on", d.on).toBool();
+    }
+    s.endArray();
     return true;
 }
 
@@ -131,6 +146,15 @@ void ShowFile::save(const State& st) const {
         s.setValue("mute", ch.mute);
         s.setValue("solo", ch.solo);
         s.setValue("delayMs", ch.delayMs);
+    }
+    s.endArray();
+
+    s.beginWriteArray(QStringLiteral("dsk"), kDskCount);
+    for (int i = 0; i < kDskCount; ++i) {
+        s.setArrayIndex(i);
+        s.setValue("source", st.dsk[i].source);
+        s.setValue("fadeDurTicks", st.dsk[i].fadeDurTicks);
+        s.setValue("on", st.dsk[i].on);
     }
     s.endArray();
 }

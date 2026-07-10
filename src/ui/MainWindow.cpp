@@ -116,6 +116,35 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     else
         pushTransition();  // push duration either way
 
+    // -- DSK row: per keyer, on-air toggle + key source + fade duration --
+    auto* dskRow = new QHBoxLayout;
+    for (int k = 0; k < kDskCount; ++k) {
+        dskBtns_[k] = new QPushButton(QStringLiteral("DSK %1").arg(k + 1));
+        dskBtns_[k]->setStyleSheet(kBtnBase);
+        connect(dskBtns_[k], &QPushButton::clicked, &bridge_,
+                [&bridge = bridge_, k] { bridge.dskToggle(k); });
+        dskRow->addWidget(dskBtns_[k]);
+
+        dskSrc_[k] = new QComboBox;
+        for (int i = 0; i < int(inputNames.size()); ++i)
+            dskSrc_[k]->addItem(
+                QStringLiteral("%1 %2").arg(i + 1).arg(inputNames[i].left(14)));
+        connect(dskSrc_[k], &QComboBox::currentIndexChanged, &bridge_,
+                [&bridge = bridge_, k](int src) { bridge.setDskSource(k, src); });
+        dskRow->addWidget(dskSrc_[k]);
+
+        dskFade_[k] = new QSpinBox;
+        dskFade_[k]->setRange(1, 600);
+        dskFade_[k]->setValue(30);
+        dskFade_[k]->setSuffix(QStringLiteral(" fr"));
+        connect(dskFade_[k], &QSpinBox::valueChanged, &bridge_,
+                [&bridge = bridge_, k](int t) { bridge.setDskFade(k, t); });
+        dskRow->addWidget(dskFade_[k]);
+        if (k == 0) dskRow->addSpacing(16);
+    }
+    dskRow->addStretch(1);
+    leftCol->addLayout(dskRow);
+
     if (bridge_.audioAvailable()) {
         auto* mixer = new MixerPanel(bridge_, inputNames);
         leftCol->addWidget(mixer);
@@ -152,6 +181,9 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     new QShortcut(QKeySequence(Qt::Key_Space), this, [this] { bridge_.cut(); });
     new QShortcut(QKeySequence(Qt::Key_Return), this, [this] { bridge_.autoTrans(); });
     new QShortcut(QKeySequence(Qt::Key_F), this, [this] { bridge_.fadeToBlack(); });
+    new QShortcut(QKeySequence(Qt::Key_D), this, [this] { bridge_.dskToggle(0); });
+    new QShortcut(QKeySequence(Qt::SHIFT | Qt::Key_D), this,
+                  [this] { bridge_.dskToggle(1); });
     for (int i = 0; i < int(inputNames.size()) && i < 9; ++i) {
         new QShortcut(QKeySequence(Qt::Key_1 + i), this,
                       [this, i] { bridge_.setProgram(i); });
@@ -162,6 +194,14 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     if (initial) {
         bridge_.setProgram(initial->program);
         bridge_.setPreview(initial->preview);
+        for (int k = 0; k < kDskCount; ++k) {
+            const auto& d = initial->dsk[k];
+            if (d.source > 0 && d.source < dskSrc_[k]->count())
+                dskSrc_[k]->setCurrentIndex(d.source);  // fires setDskSource
+            dskFade_[k]->setValue(d.fadeDurTicks);      // fires setDskFade
+            // A restored on=true keyer fades in on startup (documented).
+            if (d.on) bridge_.dskToggle(k);
+        }
     }
 
     if (showFile_) {
@@ -190,6 +230,9 @@ ShowFile::State MainWindow::collectState() const {
     st.preview = lastPreview_ < 0 ? 1 : lastPreview_;
     st.transType = transType_->currentIndex();
     st.transDurTicks = transDur_->value();
+    for (int k = 0; k < kDskCount; ++k)
+        st.dsk[k] = {dskSrc_[k]->currentIndex(), dskFade_[k]->value(),
+                     lastDskOn_[k]};
     st.cfg.masterAudioDelayMs = bridge_.masterDelayMs();
     st.chans.clear();
     for (int i = 0; i < bridge_.inputCount(); ++i)
@@ -221,10 +264,15 @@ void MainWindow::onInputNames(const QStringList& refs) {
         const QString text = QStringLiteral("%1\n%2").arg(i + 1).arg(n.left(14));
         if (i < int(pgmBtns_.size())) pgmBtns_[size_t(i)]->setText(text);
         if (i < int(pvwBtns_.size())) pvwBtns_[size_t(i)]->setText(text);
+        for (int k = 0; k < kDskCount; ++k)
+            if (i < dskSrc_[k]->count())
+                dskSrc_[k]->setItemText(
+                    i, QStringLiteral("%1 %2").arg(i + 1).arg(n.left(14)));
     }
 }
 
-void MainWindow::onState(int program, int preview, bool inTransition, bool ftb) {
+void MainWindow::onState(int program, int preview, bool inTransition, bool ftb,
+                         bool dsk1, bool dsk2) {
     if (program != lastProgram_ || preview != lastPreview_) {
         for (int i = 0; i < int(pgmBtns_.size()); ++i)
             pgmBtns_[size_t(i)]->setStyleSheet(i == program ? kBtnPgm : kBtnBase);
@@ -236,6 +284,12 @@ void MainWindow::onState(int program, int preview, bool inTransition, bool ftb) 
     if (ftb != lastFtb_) {
         ftbBtn_->setStyleSheet(ftb ? kBtnFtbOn : kBtnBase);
         lastFtb_ = ftb;
+    }
+    const bool dskOn[kDskCount] = {dsk1, dsk2};
+    for (int k = 0; k < kDskCount; ++k) {
+        if (dskOn[k] == lastDskOn_[k]) continue;
+        dskBtns_[k]->setStyleSheet(dskOn[k] ? kBtnFtbOn : kBtnBase);
+        lastDskOn_[k] = dskOn[k];
     }
     // Snap the T-bar home once a transition lands (unless the user holds it).
     if (!inTransition && !tbar_->isSliderDown() && tbar_->value() != 0) {
