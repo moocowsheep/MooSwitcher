@@ -159,5 +159,27 @@ is untouched (G4).
   gauge 0.2 ms (deadband noise). The change-detecting log monitor saw zero
   counter movement between the first status line and shutdown.
 
-Frame sync validation (tests 1–5) is complete; the listening test
-(test 6) remains a human item.
+## Listening test (test 6) — PASSED 2026-07-10
+
+Human listen over the SRT program out (AAC), monitored with
+`ffmpeg -fflags nobuffer -flags low_delay -i <srt-url> -vn -f pulse Mon`
+(≈0.3–0.5 s monitor path; plain `ffplay` buffers ~5 s — don't judge sync
+with it). Sources: testgen 1 kHz pips (NDI) + a 440 Hz continuous sine
+over SRT/HEVC.
+
+- **Crossfade / cut / FTB / limiter: clean** — no pops or clicks through
+  autos and T-bar rides, limiter holds without digital crackle, FTB dips
+  smoothly.
+- **Forced 40 ms auto-trim ramp: inaudible.** Method: the sine feed's
+  audio pts stepped +40 ms every 60 s
+  (`asetpts=PTS+floor(T/60)*0.04/TB` before the AAC encoder), which moves
+  the trim target through the 1/64-EWMA in a few seconds while the
+  applied trim slews at 1 ms/s — a live ~40 s ramp, re-firing each
+  minute, with sync N=1 on the input. On a bare sine (worst case for
+  1-sample DelayLine tap steps — harder than the R3 speech/music bar) the
+  ramps produced no clicks, warble, or pitch wobble across repeated
+  cycles. Note the pts offset is cumulative: past ~12 min of feed uptime
+  the trim pins at the 500 ms clamp; restart the feed for a fresh window.
+
+Q2 closes with what shipped: jump-while-silent + 1 ms/s slew while live.
+Frame sync validation (tests 1–6) is **complete**.

@@ -215,7 +215,9 @@ All appear in the GUI stats poll and the headless exit dump like existing counte
    0 audio skips/underruns, RSS flat) + `sync.starves` = 0, `autoTrimMs` stable
    (±0.5 ms) after first lock.
 6. **Listening test** (human) — crossfade + a forced 40 ms auto-trim ramp audible
-   check; feeds Q2.
+   check; feeds Q2. **PASSED 2026-07-10** (see `bench-framesync.md`): crossfade,
+   limiter, FTB, and repeated 40 ms trim ramps all clean by ear — the ramp was
+   audited on a bare 440 Hz sine (stricter than the speech/music bar in R3).
 
 ## 8. Risks & open questions
 
@@ -228,13 +230,16 @@ All appear in the GUI stats poll and the headless exit dump like existing counte
   (uploads already completed by definition for queued frames — staging slot could be
   released early). Not in scope for the first cut.
 - **R3 — trim ramp audibility** (DelayLine tap jumps). Deadband + 1 ms/s slew should
-  be inaudible at 48 kHz speech/music; verified by test 6.
+  be inaudible at 48 kHz speech/music; VERIFIED by test 6 (inaudible even on a bare
+  sine, 2026-07-10).
 - **Q1 — default for new shows**: RESOLVED — ship off. Bench data says the
   operator guidance is per-input anyway (N≥1 for free-running cameras where
   constant A/V matters more than +1 frame; N=0 only for audio-early feeds;
   off for lowest latency). README carries the guidance.
-- **Q2 — first-lock trim jump**: instant when the input is off-air/faded vs. always
-  slewed. Decide after listening test.
+- **Q2 — first-lock trim jump**: RESOLVED by test 6 — keep what shipped (§10): jump
+  while the lane is silent (connect/replace/first lock), slew at 1 ms/s while live.
+  The live slew is inaudible even on a bare sine, so no instant-while-faded special
+  case is needed.
 - **Q3 — preview/multiview path**: synced everywhere (single presented frame per
   input per tick — simpler, preview shows exactly what program will show). Revisit
   only if operators want minimum-latency preview.

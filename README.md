@@ -21,6 +21,8 @@ M3+M3.5 (SRT/HEVC both directions), M2 (switching/multiview), M1 (Vulkan engine)
 # SRT out (listener) + receive with any ffplay/OBS caller:
 ./build/mooswitcher --input CamA --input CamB --srt-out "srt://:9710?mode=listener&latency=120000"
 ffplay "srt://HOST:9710?mode=caller"     # latency option is MICROseconds
+# ffplay buffers seconds on live streams; for a low-latency audio monitor use:
+ffmpeg -fflags nobuffer -flags low_delay -i "srt://HOST:9710?mode=caller" -vn -f pulse Mon
 # SRT ingest as an input (audio decodes too; trim its lateness per input):
 ./build/mooswitcher --srt-input "srt://HOST:9710?mode=caller&latency=120000" --input CamB
 # A/V sync check on a TS capture (needs testgen content on program):
