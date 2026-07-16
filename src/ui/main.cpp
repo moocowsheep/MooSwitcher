@@ -1,5 +1,9 @@
+#include <algorithm>
+
 #include <QApplication>
+#include <QIcon>
 #include <QStringList>
+#include <QTabWidget>
 #include <QTimer>
 
 #include "core/Log.h"
@@ -9,6 +13,9 @@
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    QApplication::setApplicationName(QStringLiteral("MooSwitcher"));
+    QApplication::setWindowIcon(
+        QIcon(QStringLiteral(":/branding/cow-switcher-logo.svg")));
 
     // The show file loads first; CLI flags override what they name.
     QString showFilePath;
@@ -23,6 +30,7 @@ int main(int argc, char** argv) {
     moo::EngineConfig& cfg = show.cfg;
     QString shotPath;
     double shotDelayS = 6.0;
+    int shotTab = 0;
     bool cliInputs = false;
     auto addInput = [&](moo::InputSpec::Type t, const QString& ref) {
         if (!cliInputs) cfg.inputs.clear();  // CLI replaces the stored set
@@ -52,6 +60,9 @@ int main(int argc, char** argv) {
             shotPath = args[++i];  // grab the window after --shot-delay, quit
         else if (args[i] == QStringLiteral("--shot-delay") && i + 1 < args.size())
             shotDelayS = args[++i].toDouble();
+        else if (args[i] == QStringLiteral("--screenshot-tab") &&
+                 i + 1 < args.size())
+            shotTab = args[++i].toInt();
     }
     if (cfg.inputs.empty())
         cfg.inputs = {{moo::InputSpec::Type::Ndi, "MooBenchA"},
@@ -84,6 +95,9 @@ int main(int argc, char** argv) {
     win.show();
 
     if (!shotPath.isEmpty()) {
+        if (auto* tabs = win.findChild<QTabWidget*>(
+                QStringLiteral("workspaceTabs")))
+            tabs->setCurrentIndex(std::clamp(shotTab, 0, tabs->count() - 1));
         // Self-capture for verification: compositor screenshots lie about
         // occluded/unfocused Wayland windows (stale first buffer).
         QTimer::singleShot(int(shotDelayS * 1000), &win, [&win, &app, shotPath] {

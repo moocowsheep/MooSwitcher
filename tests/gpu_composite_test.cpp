@@ -111,31 +111,23 @@ TEST_CASE("composite + multiview convert BT.709 UYVY to expected RGB") {
     const uint8_t* rb = comp.readbackPtr(0);
     auto px = [&](int x, int y) { return rb + (size_t(y) * mvW + x) * 4; };
 
-    // PGM tile: left half (32x24), 64x36 fits to 32x18 centered (3px bars).
+    // PROGRAM tile: upper-right quarter.
     {
-        const uint8_t* p = px(16, 12);
+        const uint8_t* p = px(48, 9);
         INFO(int(p[0]) << "," << int(p[1]) << "," << int(p[2]));
         CHECK(near(p[0], 191, 12));
         CHECK(near(p[1], 0, 12));
         CHECK(near(p[2], 0, 12));
     }
-    // PVW tile: right half center.
+    // PREVIEW tile: lower-right quarter.
     {
-        const uint8_t* p = px(48, 12);
+        const uint8_t* p = px(48, 27);
         CHECK(near(p[0], 191, 12));
         CHECK(near(p[1], 0, 12));
     }
-    // Letterbox bar inside PGM tile (top rows of the tile) stays black.
+    // Input matrix: one source fills the left half.
     {
-        const uint8_t* p = px(16, 1);
-        CHECK(near(p[0], 0, 6));
-        CHECK(near(p[1], 0, 6));
-        CHECK(near(p[2], 0, 6));
-    }
-    // Input row cell 0 center.
-    {
-        const int rowY = (mvH * 2 / 3) & ~1;  // 24
-        const uint8_t* p = px(8, rowY + (mvH - rowY) / 2);
+        const uint8_t* p = px(12, 7);
         CHECK(near(p[0], 191, 12));
     }
 
@@ -269,8 +261,8 @@ TEST_CASE("DSK keying: straight, premult, opaque fallback, FTB over keyers") {
         tj.mvInputs.push_back({progFrame.get()});
         return tj;
     };
-    // PGM tile center of the 64x36 multiview.
-    auto pgm = [&](const uint8_t* rb) { return rb + (size_t(12) * mvW + 16) * 4; };
+    // PROGRAM tile center in the upper-right of the 64x36 multiview.
+    auto pgm = [&](const uint8_t* rb) { return rb + (size_t(9) * mvW + 48) * 4; };
 
     {  // straight: mix(red, green, 0.502) ~= (95, 96, 0)
         auto tj = baseJob();

@@ -5,6 +5,7 @@
 #include <QPushButton>
 #include <QSlider>
 #include <QSpinBox>
+#include <QStringList>
 
 #include <vector>
 
@@ -30,6 +31,7 @@ private:
                  bool dsk1, bool dsk2);
     void onInputNames(const QStringList& refs);
     void pushTransition();
+    void refreshBusReadouts();
     ShowFile::State collectState() const;
 
     EngineBridge& bridge_;
@@ -40,7 +42,13 @@ private:
     MultiviewWidget* multiview_ = nullptr;
     QLabel* banner_ = nullptr;
     QLabel* status_ = nullptr;
+    QLabel* clock_ = nullptr;
+    QLabel* healthBadge_ = nullptr;
+    QLabel* programReadout_ = nullptr;
+    QLabel* previewReadout_ = nullptr;
     std::vector<QPushButton*> pgmBtns_, pvwBtns_;
+    QPushButton* cutBtn_ = nullptr;
+    QPushButton* autoBtn_ = nullptr;
     QPushButton* ftbBtn_ = nullptr;
     QSlider* tbar_ = nullptr;
     QComboBox* transType_ = nullptr;
@@ -48,6 +56,7 @@ private:
     QPushButton* dskBtns_[kDskCount] = {nullptr, nullptr};
     QComboBox* dskSrc_[kDskCount] = {nullptr, nullptr};
     QSpinBox* dskFade_[kDskCount] = {nullptr, nullptr};
+    QStringList inputNames_;
     int lastProgram_ = -1, lastPreview_ = -1;
     bool lastFtb_ = false;
     bool lastDskOn_[kDskCount] = {false, false};

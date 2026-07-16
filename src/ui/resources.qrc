@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/branding">
+    <file alias="cow-switcher-logo.svg">assets/cow-switcher-logo.svg</file>
+  </qresource>
+</RCC>

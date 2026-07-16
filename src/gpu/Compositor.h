@@ -71,7 +71,7 @@ public:
     int nvPackExportFd(int fif) { return eng_.exportMemoryFd(packNvDev_[fif]); }
     size_t nvPackBytes() const { return size_t(show_.width) * show_.height * 3 / 2; }
 
-    // Label atlas: rows 0=PGM, 1=PVW, 2+i=input i; usedWidths in pixels.
+    // Label atlas: rows 0=PROGRAM, 1=PREVIEW, 2+i=input i; usedWidths in pixels.
     void setLabelAtlas(Image atlas, std::vector<int> usedWidths);
 
     const VideoFormatDesc& showFormat() const { return show_; }

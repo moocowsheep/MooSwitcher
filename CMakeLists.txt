@@ -166,9 +166,11 @@ if(NDI_FOUND)
       src/ui/MixerPanel.h
       src/ui/ShowFile.cpp
       src/ui/ShowFile.h
+      src/ui/resources.qrc
     )
     set_target_properties(mooswitcher PROPERTIES
       AUTOMOC ON
+      AUTORCC ON
       BUILD_RPATH "${_moo_rpath}"
       INSTALL_RPATH "${_moo_rpath}")
     target_link_libraries(mooswitcher PRIVATE moo_engine Qt6::Widgets)

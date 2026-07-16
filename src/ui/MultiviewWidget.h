@@ -13,12 +13,16 @@ public:
     explicit MultiviewWidget(QWidget* parent = nullptr);
 
     void setFrame(QImage img);  // takes ownership (already deep-copied)
+    void setInputCount(int count) { inputCount_ = count; }
+
+    QSize sizeHint() const override;
 
 protected:
     void paintEvent(QPaintEvent*) override;
 
 private:
     QImage frame_;
+    int inputCount_ = 1;
 };
 
 }  // namespace moo::ui

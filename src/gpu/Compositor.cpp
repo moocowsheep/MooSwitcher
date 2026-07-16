@@ -575,27 +575,48 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
             VK_IMAGE_LAYOUT_GENERAL);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, tile_.pipe);
-    const int topH = (mvH_ * 2 / 3) & ~1;
-    const int halfW = (mvW_ / 2) & ~1;
-    const int rowY = topH;
-    const int rowH = mvH_ - topH;
-    const int cells = std::max<int>(4, numInputs_);
-    const int cellW = (mvW_ / cells) & ~1;
+    // Live-production layout: a source matrix occupies the left half while
+    // the larger PROGRAM and PREVIEW monitors stack on the right. At 16:9 the
+    // output monitors are each exactly 16:9; input cells aspect-fit whatever
+    // source format they receive. The input grid grows downward first so the
+    // common 2-input show fills the complete left side.
+    constexpr int kColumnGap = 0;
+    constexpr int kOutputGap = 4;
+    const int splitX = (mvW_ / 2) & ~1;
+    const int inputW = splitX - kColumnGap / 2;
+    const int outputX = splitX + kColumnGap / 2;
+    const int outputW = mvW_ - outputX;
+    const int outputH = ((mvH_ - kOutputGap) / 2) & ~1;
+    const int previewY = outputH + kOutputGap;
+    const int inputCols = std::clamp(numInputs_, 1, 6);
+    const int inputRows = std::max(1, (numInputs_ + inputCols - 1) / inputCols);
+    const int inputCellW = (inputW / inputCols) & ~1;
+    const int inputVideoH = std::max(2, (inputCellW * 9 / 16) & ~1);
+    const int naturalInputH = inputVideoH + kLabelRowH;
+    const int inputCellH = std::min(
+        naturalInputH, std::max(kLabelRowH, (mvH_ / inputRows) & ~1));
 
     // Pass 1: content tiles. Overlays (labels/borders) rewrite pixels these
     // dispatches produce, so each overlay pass needs a write->write barrier —
     // without it, overlapping workgroups race and borders render "dashed".
-    tileFromProxy(cmd, programProxy_[fif], pgmProxW, pgmProxH, 0, 0, halfW, topH,
-                  fif);
+    for (int i = 0; i < numInputs_; ++i) {
+        const auto& [pw, ph] = proxDims[size_t(i)];
+        const int col = i % inputCols;
+        const int row = i / inputCols;
+        const int x = col * inputCellW;
+        const int y = row * inputCellH;
+        const int w = col == inputCols - 1 ? inputW - x : inputCellW;
+        const int h = std::min(inputCellH, mvH_ - y);
+        const int videoH = std::max(2, h - kLabelRowH);
+        tileFromProxy(cmd, inputProxy_[fif][size_t(i)], pw, ph, x, y, w,
+                      videoH, fif);
+    }
+    tileFromProxy(cmd, programProxy_[fif], pgmProxW, pgmProxH, outputX, 0,
+                  outputW, outputH, fif);
     if (job.previewInputIdx >= 0) {
         const auto& [pw, ph] = proxDims[size_t(job.previewInputIdx)];
         tileFromProxy(cmd, inputProxy_[fif][size_t(job.previewInputIdx)], pw, ph,
-                      halfW, 0, mvW_ - halfW, topH, fif);
-    }
-    for (int i = 0; i < numInputs_; ++i) {
-        const auto& [pw, ph] = proxDims[size_t(i)];
-        tileFromProxy(cmd, inputProxy_[fif][size_t(i)], pw, ph, i * cellW, rowY,
-                      cellW, rowH, fif);
+                      outputX, previewY, outputW, mvH_ - previewY, fif);
     }
 
     // Pass 2: labels.
@@ -603,22 +624,41 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-    labelTile(cmd, 0, 0, topH - kLabelRowH, halfW, fif);            // "PGM"
-    labelTile(cmd, 1, halfW, topH - kLabelRowH, mvW_ - halfW, fif); // "PVW"
-    for (int i = 0; i < numInputs_; ++i)
-        labelTile(cmd, 2 + i, i * cellW, rowY + rowH - kLabelRowH, cellW, fif);
+    if (outputH >= kLabelRowH) {
+        labelTile(cmd, 0, outputX, outputH - kLabelRowH, outputW, fif);
+        labelTile(cmd, 1, outputX, mvH_ - kLabelRowH, outputW, fif);
+    }
+    for (int i = 0; i < numInputs_; ++i) {
+        const int col = i % inputCols;
+        const int row = i / inputCols;
+        const int x = col * inputCellW;
+        const int y = row * inputCellH;
+        const int w = col == inputCols - 1 ? inputW - x : inputCellW;
+        const int h = std::min(inputCellH, mvH_ - y);
+        if (h >= kLabelRowH)
+            labelTile(cmd, 2 + i, x, y + h - kLabelRowH, w, fif);
+    }
 
     // Pass 3: tally borders (win over labels at the 3px edges).
     memBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    borderTiles(cmd, outputX, 0, outputW, outputH, kTallyRed, fif);
+    borderTiles(cmd, outputX, previewY, outputW, mvH_ - previewY, kTallyGreen,
+                fif);
     for (int i = 0; i < numInputs_; ++i) {
+        const int col = i % inputCols;
+        const int row = i / inputCols;
+        const int x = col * inputCellW;
+        const int y = row * inputCellH;
+        const int w = col == inputCols - 1 ? inputW - x : inputCellW;
+        const int h = std::min(inputCellH, mvH_ - y);
         if (i == job.tallyPgmA || i == job.tallyPgmB ||
             i == job.tallyDsk[0] || i == job.tallyDsk[1])
-            borderTiles(cmd, i * cellW, rowY, cellW, rowH, kTallyRed, fif);
+            borderTiles(cmd, x, y, w, h, kTallyRed, fif);
         else if (i == job.tallyPvw)
-            borderTiles(cmd, i * cellW, rowY, cellW, rowH, kTallyGreen, fif);
+            borderTiles(cmd, x, y, w, h, kTallyGreen, fif);
     }
 
     // tiles written -> copy out

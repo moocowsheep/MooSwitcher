@@ -205,8 +205,8 @@ bool Engine::buildLabelAtlas() {
             font::renderLabel(text, pixels.data() + size_t(row) * rowW * rowH * 4,
                               rowW, rowH);
     };
-    renderRow(0, "PGM");
-    renderRow(1, "PVW");
+    renderRow(0, "PROGRAM");
+    renderRow(1, "PREVIEW");
     for (size_t i = 0; i < cfg_.inputs.size(); ++i) {
         std::string name = cfg_.inputs[i].ref;
         if (name.rfind("srt://", 0) == 0) name = "SRT " + name.substr(6);
