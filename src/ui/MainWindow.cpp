@@ -456,6 +456,10 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     monitorCol->addWidget(multiview_, 1);
     connect(&bridge_, &EngineBridge::multiviewFrame, multiview_,
             &MultiviewWidget::setFrame);
+    connect(multiview_, &MultiviewWidget::previewSourceRequested, &bridge_,
+            &EngineBridge::setPreview);
+    connect(multiview_, &MultiviewWidget::programSourceRequested, &bridge_,
+            &EngineBridge::setProgram);
     workSplitter->addWidget(monitorPanel);
 
     // -- Persistent M/E control surface ---------------------------------------
@@ -794,6 +798,7 @@ void MainWindow::refreshBusReadouts() {
 void MainWindow::onInputNames(const QStringList& refs) {
     inputNames_.clear();
     for (const QString& ref : refs) inputNames_ << displayName(ref);
+    multiview_->setInputNames(inputNames_);
 
     for (int i = 0; i < inputNames_.size(); ++i) {
         const QString name = inputNames_[i];

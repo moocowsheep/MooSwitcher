@@ -1,5 +1,7 @@
 #include "ui/MultiviewWidget.h"
 
+#include <QFontMetrics>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 
@@ -11,6 +13,7 @@ MultiviewWidget::MultiviewWidget(QWidget* parent) : QWidget(parent) {
     setMinimumSize(640, 280);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAttribute(Qt::WA_OpaquePaintEvent);
+    setMouseTracking(true);
 }
 
 QSize MultiviewWidget::sizeHint() const { return {960, 500}; }
@@ -38,6 +41,7 @@ void MultiviewWidget::paintEvent(QPaintEvent*) {
     painter.drawRoundedRect(stage, 4, 4);
 
     if (frame_.isNull()) {
+        inputHitRects_.clear();
         painter.setPen(QColor(93, 106, 120));
         QFont title = painter.font();
         title.setPointSize(12);
@@ -109,6 +113,91 @@ void MultiviewWidget::paintEvent(QPaintEvent*) {
     };
     drawBank(inputDestination, inputSource);
     drawBank(outputDestination, outputSource);
+
+    // Draw source names after the video bank reaches its final size. Text in
+    // the GPU image would be resampled along with the thumbnails and become
+    // soft; this final-resolution overlay matches the source-button type.
+    const qreal scaleX = qreal(inputDestination.width()) / inputSource.width();
+    const qreal scaleY = qreal(inputDestination.height()) / inputSource.height();
+    QFont labelFont(QStringLiteral("Noto Sans"));
+    labelFont.setPixelSize(11);
+    labelFont.setWeight(QFont::DemiBold);
+    const QFontMetrics metrics(labelFont);
+
+    painter.save();
+    painter.setClipRect(inputDestination);
+    painter.setRenderHint(QPainter::TextAntialiasing);
+    painter.setFont(labelFont);
+    painter.setPen(QColor(201, 208, 216));
+    inputHitRects_.clear();
+    inputHitRects_.reserve(inputCount_);
+    for (int i = 0; i < inputCount_; ++i) {
+        const int col = i % inputColumns;
+        const int row = i / inputColumns;
+        const int sourceX = col * inputCellWidth;
+        const int sourceY = row * inputCellHeight;
+        const int sourceW = col == inputColumns - 1
+                                ? inputWidth - sourceX
+                                : inputCellWidth;
+        const int sourceH =
+            std::min(inputCellHeight, frame_.height() - sourceY);
+        inputHitRects_.push_back(QRectF(
+            inputDestination.left() + sourceX * scaleX,
+            inputDestination.top() + sourceY * scaleY,
+            sourceW * scaleX, sourceH * scaleY));
+        const QRectF labelRect(
+            inputDestination.left() + sourceX * scaleX,
+            inputDestination.top() +
+                (sourceY + sourceH - kInputLabelHeight) * scaleY,
+            sourceW * scaleX, kInputLabelHeight * scaleY);
+        const QRectF textRect = labelRect.adjusted(7, 0, -5, 0);
+        QString name = i < inputNames_.size()
+                           ? inputNames_[i]
+                           : QStringLiteral("INPUT %1").arg(i + 1);
+        name.replace(QLatin1Char('_'), QLatin1Char(' '));
+        const QString text =
+            QStringLiteral("%1  %2")
+                .arg(i + 1, 2, 10, QLatin1Char('0'))
+                .arg(name.toUpper());
+        painter.drawText(
+            textRect, Qt::AlignLeft | Qt::AlignVCenter,
+            metrics.elidedText(text, Qt::ElideRight, int(textRect.width())));
+    }
+    painter.restore();
+}
+
+int MultiviewWidget::sourceAt(const QPointF& position) const {
+    for (int i = 0; i < inputHitRects_.size(); ++i)
+        if (inputHitRects_[i].contains(position)) return i;
+    return -1;
+}
+
+void MultiviewWidget::mousePressEvent(QMouseEvent* event) {
+    const int source = sourceAt(event->position());
+    if (source < 0) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
+    if (event->button() == Qt::LeftButton) {
+        emit previewSourceRequested(source);
+        event->accept();
+    } else if (event->button() == Qt::RightButton) {
+        emit programSourceRequested(source);
+        event->accept();
+    } else {
+        QWidget::mousePressEvent(event);
+    }
+}
+
+void MultiviewWidget::mouseMoveEvent(QMouseEvent* event) {
+    setCursor(sourceAt(event->position()) >= 0 ? Qt::PointingHandCursor
+                                               : Qt::ArrowCursor);
+    QWidget::mouseMoveEvent(event);
+}
+
+void MultiviewWidget::leaveEvent(QEvent* event) {
+    unsetCursor();
+    QWidget::leaveEvent(event);
 }
 
 }  // namespace moo::ui

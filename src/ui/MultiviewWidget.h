@@ -1,6 +1,11 @@
 #pragma once
 #include <QImage>
+#include <QStringList>
+#include <QVector>
 #include <QWidget>
+
+class QEvent;
+class QMouseEvent;
 
 namespace moo::ui {
 
@@ -14,14 +19,29 @@ public:
 
     void setFrame(QImage img);  // takes ownership (already deep-copied)
     void setInputCount(int count) { inputCount_ = count; }
+    void setInputNames(QStringList names) {
+        inputNames_ = std::move(names);
+        update();
+    }
 
     QSize sizeHint() const override;
 
+signals:
+    void previewSourceRequested(int source);
+    void programSourceRequested(int source);
+
 protected:
     void paintEvent(QPaintEvent*) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
 private:
+    int sourceAt(const QPointF& position) const;
+
     QImage frame_;
+    QStringList inputNames_;
+    QVector<QRectF> inputHitRects_;
     int inputCount_ = 1;
 };
 

@@ -208,9 +208,11 @@ bool Engine::buildLabelAtlas() {
     renderRow(0, "PROGRAM");
     renderRow(1, "PREVIEW");
     for (size_t i = 0; i < cfg_.inputs.size(); ++i) {
-        std::string name = cfg_.inputs[i].ref;
-        if (name.rfind("srt://", 0) == 0) name = "SRT " + name.substr(6);
-        renderRow(2 + int(i), std::to_string(i + 1) + " " + name);
+        // The presenter draws input names at final display resolution so they
+        // use the same crisp Qt font as the source buttons. Keep an opaque
+        // atlas row here to provide the dark label strip beneath that text.
+        renderRow(2 + int(i), "");
+        used[2 + i] = rowW;
     }
 
     gpu::Image atlas = vk_.createImage2D(
