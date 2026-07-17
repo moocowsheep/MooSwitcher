@@ -48,6 +48,11 @@ you switch between often (constant A/V at +1 frame latency); Trim only suits aud
 sources like SRT loopbacks. Shortcuts: `Space` cut, `Enter` auto, `F` FTB, `1–9` program,
 `Shift+1–9` preview, `D`/`Shift+D` DSK 1/2.
 
+Select the program output resolution and progressive frame rate from the **OUTPUT FORMAT**
+controls above the multiview. The choice is saved immediately to the show file; restart
+MooSwitcher when the amber **RESTART TO APPLY** badge appears. The selected format drives
+both NDI and SRT program outputs on the next start.
+
 Two downstream keyers composite graphics with **native alpha (NDI/OMT UYVA)** over program —
 point a DSK at an input carrying alpha (CasparCG, OBS with alpha, `moo-testgen --uyva`), and
 toggle it on; it fades over its own duration, independent of transitions, and FTB takes it

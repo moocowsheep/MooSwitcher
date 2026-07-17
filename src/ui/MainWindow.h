@@ -32,6 +32,7 @@ private:
     void onInputNames(const QStringList& refs);
     void pushTransition();
     void refreshBusReadouts();
+    void refreshOutputFormatState();
     ShowFile::State collectState() const;
 
     EngineBridge& bridge_;
@@ -46,6 +47,9 @@ private:
     QLabel* healthBadge_ = nullptr;
     QLabel* programReadout_ = nullptr;
     QLabel* previewReadout_ = nullptr;
+    QComboBox* outputResolution_ = nullptr;
+    QComboBox* outputFrameRate_ = nullptr;
+    QLabel* outputFormatState_ = nullptr;
     std::vector<QPushButton*> pgmBtns_, pvwBtns_;
     QPushButton* cutBtn_ = nullptr;
     QPushButton* autoBtn_ = nullptr;
@@ -57,6 +61,7 @@ private:
     QComboBox* dskSrc_[kDskCount] = {nullptr, nullptr};
     QSpinBox* dskFade_[kDskCount] = {nullptr, nullptr};
     QStringList inputNames_;
+    VideoFormatDesc activeOutput_;
     int lastProgram_ = -1, lastPreview_ = -1;
     bool lastFtb_ = false;
     bool lastDskOn_[kDskCount] = {false, false};

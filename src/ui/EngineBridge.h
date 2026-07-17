@@ -64,6 +64,7 @@ public:
     int inputSyncFrames(int input) const { return engine_.inputSyncFrames(input); }
     int audioAutoTrimMs(int input) const;  // applied frame-sync trim readout
     int inputCount() const { return engine_.inputCount(); }
+    VideoFormatDesc outputFormat() const { return engine_.outputFormat(); }
 
 signals:
     void multiviewFrame(QImage frame);

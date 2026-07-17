@@ -195,7 +195,10 @@ bool Engine::createPlaceholder() {
 }
 
 bool Engine::buildLabelAtlas() {
-    const int rowW = 512, rowH = gpu::Compositor::kLabelRowH;
+    // A label may span either half of the multiview (a single input or one of
+    // the output monitors), so its background row must cover that full width.
+    const int rowW = std::max(512, comp_->mvWidth() / 2);
+    const int rowH = gpu::Compositor::kLabelRowH;
     const int rows = 2 + int(cfg_.inputs.size());
     std::vector<uint8_t> pixels(size_t(rowW) * rowH * rows * 4);
     std::vector<int> used(static_cast<size_t>(rows));
@@ -205,12 +208,13 @@ bool Engine::buildLabelAtlas() {
             font::renderLabel(text, pixels.data() + size_t(row) * rowW * rowH * 4,
                               rowW, rowH);
     };
-    renderRow(0, "PROGRAM");
-    renderRow(1, "PREVIEW");
+    // The Qt presenter draws every multiview label at final display
+    // resolution. The atlas supplies only the opaque strip behind the text.
+    renderRow(0, "");
+    renderRow(1, "");
+    used[0] = rowW;
+    used[1] = rowW;
     for (size_t i = 0; i < cfg_.inputs.size(); ++i) {
-        // The presenter draws input names at final display resolution so they
-        // use the same crisp Qt font as the source buttons. Keep an opaque
-        // atlas row here to provide the dark label strip beneath that text.
         renderRow(2 + int(i), "");
         used[2 + i] = rowW;
     }

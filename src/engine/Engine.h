@@ -110,6 +110,7 @@ public:
     int64_t srtFramesEncoded() const;
     bool srtConnected() const;
     bool srtConfigured() const { return srtOut_ != nullptr; }
+    VideoFormatDesc outputFormat() const { return cfg_.show; }
 
 private:
     void renderLoop(std::stop_token st);

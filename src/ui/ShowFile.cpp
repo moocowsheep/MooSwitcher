@@ -39,6 +39,14 @@ bool ShowFile::load(State& st) const {
     s.beginGroup(QStringLiteral("show"));
     st.cfg.show.width = s.value("width", st.cfg.show.width).toInt();
     st.cfg.show.height = s.value("height", st.cfg.show.height).toInt();
+    const qlonglong fpsN =
+        s.value("fpsN", qlonglong(st.cfg.show.fpsN)).toLongLong();
+    const qlonglong fpsD =
+        s.value("fpsD", qlonglong(st.cfg.show.fpsD)).toLongLong();
+    if (fpsN > 0 && fpsD > 0) {
+        st.cfg.show.fpsN = fpsN;
+        st.cfg.show.fpsD = fpsD;
+    }
     st.cfg.ndiOut = s.value("ndiOut", st.cfg.ndiOut).toBool();
     st.cfg.ndiOutName =
         s.value("ndiOutName", QString::fromStdString(st.cfg.ndiOutName))
@@ -111,6 +119,8 @@ void ShowFile::save(const State& st) const {
     s.beginGroup(QStringLiteral("show"));
     s.setValue("width", st.cfg.show.width);
     s.setValue("height", st.cfg.show.height);
+    s.setValue("fpsN", qlonglong(st.cfg.show.fpsN));
+    s.setValue("fpsD", qlonglong(st.cfg.show.fpsD));
     s.setValue("ndiOut", st.cfg.ndiOut);
     s.setValue("ndiOutName", QString::fromStdString(st.cfg.ndiOutName));
     s.setValue("srtOut", QString::fromStdString(st.cfg.srtUrl));

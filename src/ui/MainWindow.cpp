@@ -55,7 +55,7 @@ QLabel#clock {
     font-size: 13px;
     font-weight: 600;
 }
-QLabel#healthBadge, QLabel#busReadout, QLabel#formatBadge {
+QLabel#healthBadge, QLabel#busReadout, QLabel#formatState {
     background: #10151b;
     border: 1px solid #303a45;
     border-radius: 5px;
@@ -68,6 +68,8 @@ QLabel#healthBadge[state="good"] { color: #60dfa0; border-color: #22553f; }
 QLabel#healthBadge[state="bad"]  { color: #ff6a72; border-color: #6c2a30; }
 QLabel#busReadout[bus="program"] { color: #ff737a; border-color: #713038; }
 QLabel#busReadout[bus="preview"] { color: #70d99a; border-color: #275f44; }
+QLabel#formatState[state="active"] { color: #60dfa0; border-color: #22553f; }
+QLabel#formatState[state="pending"] { color: #ffc766; border-color: #70551e; }
 QLabel#alertBanner {
     background: #40191d;
     color: #ffb8bc;
@@ -220,6 +222,7 @@ QComboBox, QSpinBox, QLineEdit {
 }
 QComboBox:hover, QSpinBox:hover, QLineEdit:hover { border-color: #536171; }
 QComboBox:focus, QSpinBox:focus, QLineEdit:focus { border-color: #4d96bd; }
+QComboBox#formatSelector { min-width: 108px; font-size: 10px; font-weight: 750; }
 QComboBox::drop-down { border: none; width: 20px; }
 QComboBox QAbstractItemView {
     background: #151b22;
@@ -335,6 +338,58 @@ QFrame* makeModule(const char* accent = nullptr) {
     return panel;
 }
 
+struct ResolutionPreset {
+    int width;
+    int height;
+    const char* label;
+};
+
+constexpr ResolutionPreset kResolutionPresets[] = {
+    {1280, 720, "1280 × 720  HD"},
+    {1920, 1080, "1920 × 1080  FHD"},
+    {2560, 1440, "2560 × 1440  QHD"},
+    {3840, 2160, "3840 × 2160  UHD"},
+    {4096, 2160, "4096 × 2160  DCI 4K"},
+    {7680, 4320, "7680 × 4320  8K"},
+};
+
+struct FrameRatePreset {
+    qlonglong numerator;
+    qlonglong denominator;
+    const char* label;
+};
+
+constexpr FrameRatePreset kFrameRatePresets[] = {
+    {24000, 1001, "23.98p"}, {24, 1, "24p"},
+    {25, 1, "25p"},         {30000, 1001, "29.97p"},
+    {30, 1, "30p"},         {50, 1, "50p"},
+    {60000, 1001, "59.94p"}, {60, 1, "60p"},
+};
+
+int findResolution(const QComboBox* combo, int width, int height) {
+    for (int i = 0; i < combo->count(); ++i)
+        if (combo->itemData(i).toInt() == width &&
+            combo->itemData(i, Qt::UserRole + 1).toInt() == height)
+            return i;
+    return -1;
+}
+
+int findFrameRate(const QComboBox* combo, qlonglong numerator,
+                  qlonglong denominator) {
+    for (int i = 0; i < combo->count(); ++i)
+        if (combo->itemData(i).toLongLong() == numerator &&
+            combo->itemData(i, Qt::UserRole + 1).toLongLong() == denominator)
+            return i;
+    return -1;
+}
+
+QString decimalFrameRate(qlonglong numerator, qlonglong denominator) {
+    QString rate = QString::number(double(numerator) / double(denominator), 'f', 3);
+    while (rate.endsWith(QLatin1Char('0'))) rate.chop(1);
+    if (rate.endsWith(QLatin1Char('.'))) rate.chop(1);
+    return rate;
+}
+
 }  // namespace
 
 MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
@@ -346,7 +401,11 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     setWindowIcon(QIcon(QStringLiteral(":/branding/cow-switcher-logo.svg")));
     setStyleSheet(QLatin1String(kProductionStyle));
     setMinimumSize(1050, 720);
-    if (initial) baseState_ = *initial;
+    activeOutput_ = bridge_.outputFormat();
+    if (initial)
+        baseState_ = *initial;
+    else
+        baseState_.cfg.show = activeOutput_;
 
     auto* central = new QWidget;
     central->setObjectName(QStringLiteral("rootSurface"));
@@ -441,14 +500,69 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
         makeSectionTitle(QStringLiteral("MULTIVIEW"),
                          QStringLiteral("INPUT MATRIX  /  PROGRAM  /  PREVIEW")));
     monitorHeader->addStretch(1);
-    auto* format = new QLabel;
-    format->setObjectName(QStringLiteral("formatBadge"));
-    const int showW = initial ? initial->cfg.show.width : 0;
-    const int showH = initial ? initial->cfg.show.height : 0;
-    format->setText(showW > 0 && showH > 0
-                        ? QStringLiteral("OUTPUT  %1 × %2").arg(showW).arg(showH)
-                        : QStringLiteral("OUTPUT  ACTIVE"));
-    monitorHeader->addWidget(format);
+    auto* outputLabel = new QLabel(QStringLiteral("OUTPUT FORMAT"));
+    outputLabel->setObjectName(QStringLiteral("eyebrow"));
+    monitorHeader->addWidget(outputLabel);
+
+    outputResolution_ = new QComboBox;
+    outputResolution_->setObjectName(QStringLiteral("formatSelector"));
+    outputResolution_->setToolTip(
+        QStringLiteral("Program output resolution (restart required to apply)"));
+    for (const auto& preset : kResolutionPresets) {
+        outputResolution_->addItem(QString::fromUtf8(preset.label), preset.width);
+        outputResolution_->setItemData(outputResolution_->count() - 1,
+                                       preset.height, Qt::UserRole + 1);
+    }
+    int resolutionIndex = findResolution(outputResolution_, activeOutput_.width,
+                                         activeOutput_.height);
+    if (resolutionIndex < 0) {
+        outputResolution_->addItem(
+            QStringLiteral("%1 × %2  CUSTOM")
+                .arg(activeOutput_.width)
+                .arg(activeOutput_.height),
+            activeOutput_.width);
+        resolutionIndex = outputResolution_->count() - 1;
+        outputResolution_->setItemData(resolutionIndex, activeOutput_.height,
+                                       Qt::UserRole + 1);
+    }
+    outputResolution_->setCurrentIndex(resolutionIndex);
+    monitorHeader->addWidget(outputResolution_);
+
+    outputFrameRate_ = new QComboBox;
+    outputFrameRate_->setObjectName(QStringLiteral("formatSelector"));
+    outputFrameRate_->setToolTip(
+        QStringLiteral("Progressive program output frame rate (restart required to apply)"));
+    for (const auto& preset : kFrameRatePresets) {
+        outputFrameRate_->addItem(QString::fromUtf8(preset.label), preset.numerator);
+        outputFrameRate_->setItemData(outputFrameRate_->count() - 1,
+                                      preset.denominator, Qt::UserRole + 1);
+    }
+    int rateIndex = findFrameRate(outputFrameRate_, activeOutput_.fpsN,
+                                  activeOutput_.fpsD);
+    if (rateIndex < 0) {
+        outputFrameRate_->addItem(
+            decimalFrameRate(activeOutput_.fpsN, activeOutput_.fpsD) +
+                QStringLiteral("p  CUSTOM"),
+            qlonglong(activeOutput_.fpsN));
+        rateIndex = outputFrameRate_->count() - 1;
+        outputFrameRate_->setItemData(rateIndex, qlonglong(activeOutput_.fpsD),
+                                      Qt::UserRole + 1);
+    }
+    outputFrameRate_->setCurrentIndex(rateIndex);
+    monitorHeader->addWidget(outputFrameRate_);
+
+    outputFormatState_ = new QLabel;
+    outputFormatState_->setObjectName(QStringLiteral("formatState"));
+    monitorHeader->addWidget(outputFormatState_);
+    auto outputChanged = [this](int) {
+        refreshOutputFormatState();
+        saveShow();
+    };
+    connect(outputResolution_, &QComboBox::currentIndexChanged, this,
+            outputChanged);
+    connect(outputFrameRate_, &QComboBox::currentIndexChanged, this,
+            outputChanged);
+    refreshOutputFormatState();
     monitorCol->addLayout(monitorHeader);
 
     multiview_ = new MultiviewWidget;
@@ -742,6 +856,14 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
 
 ShowFile::State MainWindow::collectState() const {
     ShowFile::State state = baseState_;
+    state.cfg.show.width = outputResolution_->currentData().toInt();
+    state.cfg.show.height =
+        outputResolution_->currentData(Qt::UserRole + 1).toInt();
+    state.cfg.show.fpsN = outputFrameRate_->currentData().toLongLong();
+    state.cfg.show.fpsD =
+        outputFrameRate_->currentData(Qt::UserRole + 1).toLongLong();
+    state.cfg.show.colorimetry =
+        VideoFormatDesc::colorimetryForHeight(state.cfg.show.height);
     state.cfg.inputs.clear();
     for (int i = 0; i < bridge_.inputCount(); ++i) {
         // The engine knows each input's true type; re-deriving it from the
@@ -777,6 +899,29 @@ void MainWindow::saveShow() {
 
 void MainWindow::pushTransition() {
     bridge_.setTransition(transType_->currentIndex(), transDur_->value(), 0.02f);
+}
+
+void MainWindow::refreshOutputFormatState() {
+    const int width = outputResolution_->currentData().toInt();
+    const int height =
+        outputResolution_->currentData(Qt::UserRole + 1).toInt();
+    const qlonglong fpsN = outputFrameRate_->currentData().toLongLong();
+    const qlonglong fpsD =
+        outputFrameRate_->currentData(Qt::UserRole + 1).toLongLong();
+    const bool pending = width != activeOutput_.width ||
+                         height != activeOutput_.height ||
+                         fpsN != activeOutput_.fpsN || fpsD != activeOutput_.fpsD;
+    outputFormatState_->setText(pending ? QStringLiteral("RESTART TO APPLY")
+                                        : QStringLiteral("ACTIVE"));
+    outputFormatState_->setToolTip(
+        pending
+            ? QStringLiteral("Saved for the next start. The engine is currently "
+                             "running at %1 × %2, %3p.")
+                  .arg(activeOutput_.width)
+                  .arg(activeOutput_.height)
+                  .arg(decimalFrameRate(activeOutput_.fpsN, activeOutput_.fpsD))
+            : QStringLiteral("This is the format currently used by the engine."));
+    setVisualState(outputFormatState_, "state", pending ? "pending" : "active");
 }
 
 void MainWindow::refreshBusReadouts() {
