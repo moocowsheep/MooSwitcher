@@ -210,4 +210,30 @@ if(MOO_BUILD_TESTS)
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)
   catch_discover_tests(moo_tests)
+
+  if(TARGET mooswitcher)
+    add_executable(moo_ui_tests
+      tests/ui_output_format_test.cpp
+      src/ui/MainWindow.cpp
+      src/ui/MainWindow.h
+      src/ui/MultiviewWidget.cpp
+      src/ui/MultiviewWidget.h
+      src/ui/EngineBridge.cpp
+      src/ui/EngineBridge.h
+      src/ui/MixerPanel.cpp
+      src/ui/MixerPanel.h
+      src/ui/ShowFile.cpp
+      src/ui/ShowFile.h
+    )
+    set_target_properties(moo_ui_tests PROPERTIES
+      AUTOMOC ON
+      BUILD_RPATH "${_moo_rpath}"
+      INSTALL_RPATH "${_moo_rpath}")
+    target_link_libraries(moo_ui_tests PRIVATE
+      moo_engine Qt6::Widgets Catch2::Catch2WithMain)
+    target_compile_options(moo_ui_tests PRIVATE -Wall -Wextra)
+    catch_discover_tests(moo_ui_tests
+      TEST_PREFIX "ui: "
+      PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+  endif()
 endif()

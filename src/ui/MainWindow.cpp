@@ -222,7 +222,9 @@ QComboBox, QSpinBox, QLineEdit {
 }
 QComboBox:hover, QSpinBox:hover, QLineEdit:hover { border-color: #536171; }
 QComboBox:focus, QSpinBox:focus, QLineEdit:focus { border-color: #4d96bd; }
-QComboBox#formatSelector { min-width: 108px; font-size: 10px; font-weight: 750; }
+QComboBox#outputResolution, QComboBox#outputFrameRate {
+  min-width: 108px; font-size: 10px; font-weight: 750;
+}
 QComboBox::drop-down { border: none; width: 20px; }
 QComboBox QAbstractItemView {
     background: #151b22;
@@ -505,7 +507,7 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     monitorHeader->addWidget(outputLabel);
 
     outputResolution_ = new QComboBox;
-    outputResolution_->setObjectName(QStringLiteral("formatSelector"));
+    outputResolution_->setObjectName(QStringLiteral("outputResolution"));
     outputResolution_->setToolTip(
         QStringLiteral("Program output resolution (restart required to apply)"));
     for (const auto& preset : kResolutionPresets) {
@@ -529,7 +531,7 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     monitorHeader->addWidget(outputResolution_);
 
     outputFrameRate_ = new QComboBox;
-    outputFrameRate_->setObjectName(QStringLiteral("formatSelector"));
+    outputFrameRate_->setObjectName(QStringLiteral("outputFrameRate"));
     outputFrameRate_->setToolTip(
         QStringLiteral("Progressive program output frame rate (restart required to apply)"));
     for (const auto& preset : kFrameRatePresets) {
