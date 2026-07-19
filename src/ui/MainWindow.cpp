@@ -25,164 +25,265 @@ namespace {
 
 constexpr auto kProductionStyle = R"QSS(
 QMainWindow, QWidget#rootSurface {
-    background: #090c10;
-    color: #d7dde5;
+    background: #080b10;
+    color: #dbe3eb;
     font-family: "Inter", "Noto Sans", "DejaVu Sans", sans-serif;
     font-size: 12px;
 }
 QToolTip {
-    background: #1b222b;
-    color: #f2f5f8;
-    border: 1px solid #3a4654;
-    padding: 6px;
+    background: #202a35;
+    color: #f5f8fb;
+    border: 1px solid #516174;
+    border-radius: 5px;
+    padding: 7px 9px;
 }
 QFrame#topBar {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #1b222a, stop:1 #12171d);
-    border-bottom: 1px solid #2b343e;
+                                stop:0 #1b2530, stop:0.55 #131b24,
+                                stop:1 #0d131a);
+    border-bottom: 1px solid #314151;
 }
 QLabel#brandMark {
-    color: #f5f7f9;
-    font-size: 19px;
+    color: #f7f9fb;
+    font-size: 18px;
     font-weight: 800;
-    letter-spacing: 2px;
+    letter-spacing: 2.4px;
 }
 QLabel#brandIcon { background: transparent; }
-QLabel#brandCaption, QLabel#eyebrow, QLabel#subtleText {
-    color: #768392;
+QLabel#brandCaption {
+    color: #5eb4dc;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+}
+QLabel#eyebrow, QLabel#subtleText {
+    color: #7d8c9c;
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 1px;
 }
 QLabel#clock {
-    color: #aeb8c3;
+    color: #e2e8ee;
     font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 15px;
+    font-weight: 700;
+    padding-left: 3px;
 }
-QLabel#healthBadge, QLabel#busReadout, QLabel#formatState, QLabel#recordState {
-    background: #10151b;
-    border: 1px solid #303a45;
-    border-radius: 5px;
-    color: #aeb8c3;
+QLabel#healthBadge, QLabel#busReadout, QLabel#formatState {
+    background: #0c1219;
+    border: 1px solid #344352;
+    border-radius: 6px;
+    color: #b9c5d0;
     font-size: 10px;
     font-weight: 800;
-    padding: 5px 9px;
+    padding: 7px 10px;
 }
-QLabel#healthBadge[state="good"] { color: #60dfa0; border-color: #22553f; }
-QLabel#healthBadge[state="bad"]  { color: #ff6a72; border-color: #6c2a30; }
-QLabel#busReadout[bus="program"] { color: #ff737a; border-color: #713038; }
-QLabel#busReadout[bus="preview"] { color: #70d99a; border-color: #275f44; }
-QLabel#formatState[state="active"] { color: #60dfa0; border-color: #22553f; }
-QLabel#formatState[state="pending"] { color: #ffc766; border-color: #70551e; }
-QLabel#recordState[state="recording"] { color: #ff737a; border-color: #713038; }
-QLabel#recordState[state="error"] { color: #ffc766; border-color: #70551e; }
+QLabel#healthBadge[state="good"] {
+    color: #67e3aa;
+    background: #0c1b17;
+    border-color: #286248;
+}
+QLabel#healthBadge[state="bad"] {
+    color: #ff7981;
+    background: #251216;
+    border-color: #77313a;
+}
+QLabel#busReadout {
+    min-width: 118px;
+    padding-left: 11px;
+    padding-right: 11px;
+}
+QLabel#busReadout[bus="program"] {
+    color: #ff8188;
+    background: #211116;
+    border-color: #7d303b;
+    border-left: 3px solid #f04450;
+}
+QLabel#busReadout[bus="preview"] {
+    color: #75e2a2;
+    background: #0d1d17;
+    border-color: #296a4a;
+    border-left: 3px solid #34c37a;
+}
+QLabel#formatState[state="active"] {
+    color: #67e3aa;
+    background: #0d1d17;
+    border-color: #286248;
+}
+QLabel#formatState[state="pending"] {
+    color: #ffd071;
+    background: #211a0c;
+    border-color: #75571e;
+}
+QFrame#recordDeck, QFrame#outputDeck {
+    background: #0b1117;
+    border: 1px solid #2e3b48;
+    border-radius: 7px;
+}
+QFrame#recordDeck[feed="program"] { border-color: #5d2931; }
+QFrame#recordDeck[feed="clean"] { border-color: #28566a; }
+QLabel#recordState {
+    background: transparent;
+    border: none;
+    color: #71808e;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+    font-size: 9px;
+    font-weight: 800;
+    min-width: 30px;
+    padding: 0 2px;
+}
+QLabel#recordState[state="recording"] { color: #ff8188; }
+QLabel#recordState[state="pending"] { color: #ffd071; }
+QLabel#recordState[state="error"] { color: #ffd071; }
 QLabel#alertBanner {
-    background: #40191d;
-    color: #ffb8bc;
-    border-bottom: 1px solid #87323a;
+    background: #3d171d;
+    color: #ffc0c4;
+    border-bottom: 1px solid #913641;
     font-weight: 700;
-    padding: 7px 15px;
+    padding: 8px 17px;
 }
 QFrame#monitorPanel, QFrame#modulePanel, QFrame#channelStrip {
-    background: #11161c;
-    border: 1px solid #29323c;
-    border-radius: 6px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #121a22, stop:1 #0d1319);
+    border: 1px solid #2b3946;
+    border-radius: 8px;
 }
-QFrame#modulePanel[accent="red"]   { border-top: 2px solid #a93640; }
-QFrame#modulePanel[accent="green"] { border-top: 2px solid #31845b; }
-QFrame#modulePanel[accent="blue"]  { border-top: 2px solid #347b9e; }
+QFrame#monitorPanel { border-color: #30404e; }
+QFrame#modulePanel[accent="red"]   { border-top: 2px solid #d23b48; }
+QFrame#modulePanel[accent="green"] { border-top: 2px solid #35a86f; }
+QFrame#modulePanel[accent="blue"]  { border-top: 2px solid #3e9bc7; }
 QFrame#channelStrip {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #171d24, stop:1 #0d1116);
+                                stop:0 #18222c, stop:1 #0c1117);
 }
-QFrame#channelStrip[master="true"] { border-top: 2px solid #3f9dca; }
+QFrame#channelStrip[master="true"] { border-top: 2px solid #4badd8; }
 QLabel#sectionTitle {
-    color: #dce2e8;
+    color: #e4eaf0;
     font-size: 11px;
     font-weight: 800;
-    letter-spacing: 1px;
+    letter-spacing: 1.2px;
 }
 QLabel#sectionHint {
-    color: #687585;
+    color: #718092;
     font-size: 10px;
 }
 QLabel#busTag {
-    background: #171d24;
-    border: 1px solid #313b46;
-    border-radius: 5px;
-    color: #8e9aa7;
+    background: #111922;
+    border: 1px solid #344352;
+    border-radius: 6px;
+    color: #97a5b3;
     font-size: 10px;
     font-weight: 800;
     letter-spacing: 1px;
     padding: 5px;
 }
-QLabel#busTag[bus="program"] { color: #ff7078; border-left: 3px solid #ed3945; }
-QLabel#busTag[bus="preview"] { color: #6fdb99; border-left: 3px solid #32b56e; }
+QLabel#busTag[bus="program"] {
+    color: #ff7b83;
+    background: #211116;
+    border-color: #6e2d36;
+    border-left: 3px solid #f04450;
+}
+QLabel#busTag[bus="preview"] {
+    color: #72dfa0;
+    background: #0d1d17;
+    border-color: #286044;
+    border-left: 3px solid #34c37a;
+}
 QPushButton {
     outline: none;
 }
 QPushButton#sourceButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #242c35, stop:1 #171d24);
-    border: 1px solid #3a4551;
-    border-bottom-color: #0a0d11;
-    border-radius: 5px;
-    color: #c9d0d8;
+                                stop:0 #293642, stop:0.12 #25313c,
+                                stop:1 #151c24);
+    border: 1px solid #405161;
+    border-bottom: 2px solid #070a0e;
+    border-radius: 6px;
+    color: #d3dbe3;
     font-size: 11px;
     font-weight: 750;
     min-width: 88px;
     min-height: 47px;
     padding: 3px 7px;
 }
-QPushButton#sourceButton:hover { background: #2b3540; border-color: #596777; color: white; }
-QPushButton#sourceButton:pressed { background: #101419; padding-top: 5px; }
+QPushButton#sourceButton:hover {
+    background: #2f3e4c;
+    border-color: #6d8194;
+    color: white;
+}
+QPushButton#sourceButton:pressed {
+    background: #0f151b;
+    border-bottom-width: 1px;
+    padding-top: 5px;
+}
 QPushButton#sourceButton[tally="program"] {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #a82b35, stop:1 #681b23);
-    border: 2px solid #ff515b;
+                                stop:0 #b8333e, stop:1 #701c26);
+    border: 2px solid #ff5963;
     color: #ffffff;
 }
 QPushButton#sourceButton[tally="preview"] {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #277e52, stop:1 #174a32);
-    border: 2px solid #52d68a;
+                                stop:0 #27875a, stop:1 #164b34);
+    border: 2px solid #56df91;
     color: #ffffff;
 }
 QPushButton#actionButton, QPushButton#keyButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #29333d, stop:1 #171d24);
-    border: 1px solid #43505d;
-    border-bottom: 2px solid #090c10;
-    border-radius: 5px;
-    color: #e0e5ea;
+                                stop:0 #2c3945, stop:1 #172029);
+    border: 1px solid #465a6c;
+    border-bottom: 2px solid #070a0e;
+    border-radius: 6px;
+    color: #e5eaf0;
     font-size: 11px;
     font-weight: 850;
     min-height: 38px;
     padding: 4px 11px;
 }
 QPushButton#actionButton:hover, QPushButton#keyButton:hover {
-    background: #34404c; border-color: #657486;
+    background: #354655; border-color: #71869a;
 }
 QPushButton#actionButton:pressed, QPushButton#keyButton:pressed {
     background: #11161b; border-bottom-width: 1px; padding-top: 6px;
 }
+QPushButton#actionButton:disabled, QPushButton#keyButton:disabled,
+QPushButton#sourceButton:disabled {
+    background: #11171d;
+    border-color: #28333e;
+    color: #53606c;
+}
 QPushButton#actionButton[action="cut"] { color: #ffd56c; }
-QPushButton#actionButton[action="auto"] { color: #7bc7f0; }
-QPushButton#actionButton[action="ftb"] { color: #ff777f; }
+QPushButton#actionButton[action="auto"] { color: #82d2fa; }
+QPushButton#actionButton[action="ftb"] { color: #ff8188; }
 QPushButton#recordButton {
-    background: #171d24;
-    border: 1px solid #713038;
+    background: #171f28;
+    border: 1px solid #70303a;
     border-radius: 5px;
-    color: #ff8a90;
+    color: #ff8d93;
     font-size: 10px;
     font-weight: 850;
-    min-height: 28px;
-    padding: 3px 10px;
+    min-height: 27px;
+    padding: 3px 9px;
+}
+QPushButton#recordButton[feed="clean"] {
+    color: #77ccec;
+    border-color: #2c6b85;
+}
+QPushButton#recordButton:hover {
+    background: #252f3a;
+    border-color: #b04a56;
+}
+QPushButton#recordButton[feed="clean"]:hover {
+    border-color: #4fa6c9;
 }
 QPushButton#recordButton:checked {
     background: #8a222c;
     border-color: #ff5963;
+    color: white;
+}
+QPushButton#recordButton[feed="clean"]:checked {
+    background: #1e607b;
+    border-color: #70d3f6;
     color: white;
 }
 QPushButton#actionButton[active="true"] {
@@ -228,24 +329,31 @@ QLabel#channelIndex, QLabel#gainReadout, QLabel#trimReadout {
 QLabel#gainReadout { color: #91a1b1; font-family: "DejaVu Sans Mono", monospace; }
 QLabel#meterScale { color: #596675; font-size: 8px; }
 QFrame#keyerCard {
-    background: #0d1116;
-    border: 1px solid #27303a;
-    border-radius: 5px;
+    background: #0b1117;
+    border: 1px solid #2c3a47;
+    border-radius: 7px;
 }
-QLabel#keyerTitle { color: #c7ced6; font-size: 10px; font-weight: 800; }
+QLabel#keyerTitle {
+    color: #d4dce4;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.7px;
+}
 QComboBox, QSpinBox, QLineEdit {
-    background: #0c1015;
-    border: 1px solid #35414d;
-    border-radius: 4px;
-    color: #d1d8df;
+    background: #090e13;
+    border: 1px solid #3a4a59;
+    border-radius: 5px;
+    color: #d9e0e7;
     min-height: 26px;
     padding: 2px 7px;
     selection-background-color: #326b8c;
 }
-QComboBox:hover, QSpinBox:hover, QLineEdit:hover { border-color: #536171; }
-QComboBox:focus, QSpinBox:focus, QLineEdit:focus { border-color: #4d96bd; }
+QComboBox:hover, QSpinBox:hover, QLineEdit:hover { border-color: #617487; }
+QComboBox:focus, QSpinBox:focus, QLineEdit:focus { border-color: #55abd2; }
 QComboBox#outputResolution, QComboBox#outputFrameRate {
   min-width: 108px; font-size: 10px; font-weight: 750;
+  background: #0d141b;
+  border-color: #334757;
 }
 QComboBox::drop-down { border: none; width: 20px; }
 QComboBox QAbstractItemView {
@@ -274,17 +382,34 @@ QSlider::sub-page:vertical, QSlider::add-page:vertical {
     background: #0a0e12;
     border-radius: 3px;
 }
-QTabWidget#workspaceTabs::pane {
-    background: #0e1318;
-    border: 1px solid #29323c;
+QSlider#tBar::groove:vertical {
+    background: qlineargradient(x1:0, y1:1, x2:0, y2:0,
+                                stop:0 #101820, stop:0.5 #1c3544,
+                                stop:1 #24546a);
+    border: 1px solid #40596a;
     border-radius: 5px;
+    width: 10px;
+}
+QSlider#tBar::handle:vertical {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #7891a3, stop:0.5 #f3f7fa,
+                                stop:1 #7891a3);
+    border: 1px solid #f5f8fa;
+    border-radius: 5px;
+    height: 22px;
+    margin: 0 -11px;
+}
+QTabWidget#workspaceTabs::pane {
+    background: #0c1218;
+    border: 1px solid #2c3a47;
+    border-radius: 7px;
     top: -1px;
 }
 QTabWidget#workspaceTabs QTabBar::tab {
-    background: #11171d;
-    border: 1px solid #29323c;
+    background: #0e151c;
+    border: 1px solid #2c3a47;
     border-bottom: none;
-    color: #748190;
+    color: #778798;
     font-size: 10px;
     font-weight: 850;
     letter-spacing: 1px;
@@ -293,9 +418,9 @@ QTabWidget#workspaceTabs QTabBar::tab {
     margin-right: 2px;
 }
 QTabWidget#workspaceTabs QTabBar::tab:selected {
-    background: #1a222a;
-    color: #e3e7eb;
-    border-top: 2px solid #4b9fc8;
+    background: #18232d;
+    color: #edf2f6;
+    border-top: 2px solid #53add5;
 }
 QTabWidget#workspaceTabs QTabBar::tab:hover:!selected { color: #bac3cc; }
 QScrollArea { background: transparent; border: none; }
@@ -313,20 +438,41 @@ QScrollBar::handle:horizontal, QScrollBar::handle:vertical {
     min-height: 30px;
 }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
-QSplitter::handle { background: #090c10; height: 5px; }
+QSplitter::handle {
+    background: #080b10;
+    border-top: 1px solid #18222c;
+    border-bottom: 1px solid #05070a;
+    height: 6px;
+}
 QLabel#statusLine {
-    color: #5f6d7b;
+    background: #070a0e;
+    border-top: 1px solid #1d2832;
+    color: #657789;
     font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
     font-size: 9px;
-    padding: 2px 5px;
+    padding: 4px 8px;
 }
 QDialog, QListWidget {
-    background: #11171d;
-    color: #d7dde5;
+    background: #10171e;
+    color: #dbe3eb;
 }
 QListWidget { border: 1px solid #35414d; border-radius: 4px; }
 QListWidget::item { padding: 7px; }
 QListWidget::item:selected { background: #315f79; }
+QDialogButtonBox QPushButton {
+    background: #1b2732;
+    border: 1px solid #465a6c;
+    border-radius: 5px;
+    color: #e4eaf0;
+    font-weight: 750;
+    min-width: 76px;
+    min-height: 28px;
+    padding: 3px 10px;
+}
+QDialogButtonBox QPushButton:hover {
+    background: #2c3c4a;
+    border-color: #6e8498;
+}
 )QSS";
 
 QString displayName(QString ref) {
@@ -445,16 +591,16 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     // Persistent top strip: show identity, bus tallies, clock, and health.
     auto* topBar = new QFrame;
     topBar->setObjectName(QStringLiteral("topBar"));
-    topBar->setFixedHeight(55);
+    topBar->setFixedHeight(64);
     auto* topRow = new QHBoxLayout(topBar);
-    topRow->setContentsMargins(17, 7, 15, 7);
-    topRow->setSpacing(10);
+    topRow->setContentsMargins(16, 8, 14, 8);
+    topRow->setSpacing(9);
 
     auto* brandIcon = new QLabel;
     brandIcon->setObjectName(QStringLiteral("brandIcon"));
-    brandIcon->setFixedSize(41, 41);
+    brandIcon->setFixedSize(44, 44);
     brandIcon->setPixmap(
-        QIcon(QStringLiteral(":/branding/cow-switcher-logo.svg")).pixmap(41, 41));
+        QIcon(QStringLiteral(":/branding/cow-switcher-logo.svg")).pixmap(44, 44));
     brandIcon->setToolTip(QStringLiteral("MooSwitcher"));
     topRow->addWidget(brandIcon);
 
@@ -467,27 +613,38 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     brandCol->addWidget(brand);
     brandCol->addWidget(brandCaption);
     topRow->addLayout(brandCol);
-    topRow->addStretch(1);
+    topRow->addStretch(2);
 
     programReadout_ = new QLabel;
     programReadout_->setObjectName(QStringLiteral("busReadout"));
     programReadout_->setProperty("bus", "program");
+    programReadout_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     previewReadout_ = new QLabel;
     previewReadout_->setObjectName(QStringLiteral("busReadout"));
     previewReadout_->setProperty("bus", "preview");
+    previewReadout_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     topRow->addWidget(programReadout_);
     topRow->addWidget(previewReadout_);
 
+    auto* programRecordDeck = new QFrame;
+    programRecordDeck->setObjectName(QStringLiteral("recordDeck"));
+    programRecordDeck->setProperty("feed", "program");
+    auto* programRecordRow = new QHBoxLayout(programRecordDeck);
+    programRecordRow->setContentsMargins(4, 3, 5, 3);
+    programRecordRow->setSpacing(4);
     recordBtn_ = new QPushButton(QStringLiteral("●  RECORD"));
     recordBtn_->setObjectName(QStringLiteral("recordButton"));
+    recordBtn_->setProperty("feed", "program");
     recordBtn_->setCheckable(true);
     recordBtn_->setToolTip(
         QStringLiteral("Record the program mix as HEVC/AAC Matroska"));
-    topRow->addWidget(recordBtn_);
+    programRecordRow->addWidget(recordBtn_);
     recordState_ = new QLabel(QStringLiteral("IDLE"));
     recordState_->setObjectName(QStringLiteral("recordState"));
     recordState_->setProperty("state", "idle");
-    topRow->addWidget(recordState_);
+    recordState_->setProperty("feed", "program");
+    programRecordRow->addWidget(recordState_);
+    topRow->addWidget(programRecordDeck);
     connect(recordBtn_, &QPushButton::clicked, this, [this](bool checked) {
         if (!checked) {
             bridge_.stopRecording();
@@ -519,16 +676,25 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
         setVisualState(recordState_, "state", "pending");
     });
 
-    cleanRecordBtn_ = new QPushButton(QStringLiteral("●  CLEAN REC"));
+    auto* cleanRecordDeck = new QFrame;
+    cleanRecordDeck->setObjectName(QStringLiteral("recordDeck"));
+    cleanRecordDeck->setProperty("feed", "clean");
+    auto* cleanRecordRow = new QHBoxLayout(cleanRecordDeck);
+    cleanRecordRow->setContentsMargins(4, 3, 5, 3);
+    cleanRecordRow->setSpacing(4);
+    cleanRecordBtn_ = new QPushButton(QStringLiteral("●  CLEAN"));
     cleanRecordBtn_->setObjectName(QStringLiteral("recordButton"));
+    cleanRecordBtn_->setProperty("feed", "clean");
     cleanRecordBtn_->setCheckable(true);
     cleanRecordBtn_->setToolTip(QStringLiteral(
         "Record the switched program without downstream key graphics"));
-    topRow->addWidget(cleanRecordBtn_);
+    cleanRecordRow->addWidget(cleanRecordBtn_);
     cleanRecordState_ = new QLabel(QStringLiteral("IDLE"));
     cleanRecordState_->setObjectName(QStringLiteral("recordState"));
     cleanRecordState_->setProperty("state", "idle");
-    topRow->addWidget(cleanRecordState_);
+    cleanRecordState_->setProperty("feed", "clean");
+    cleanRecordRow->addWidget(cleanRecordState_);
+    topRow->addWidget(cleanRecordDeck);
     connect(cleanRecordBtn_, &QPushButton::clicked, this,
             [this](bool checked) {
         if (!checked) {
@@ -567,7 +733,7 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
 
     clock_ = new QLabel;
     clock_->setObjectName(QStringLiteral("clock"));
-    clock_->setMinimumWidth(78);
+    clock_->setMinimumWidth(80);
     clock_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     topRow->addWidget(clock_);
     auto updateClock = [this] {
@@ -603,17 +769,22 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     auto* monitorPanel = new QFrame;
     monitorPanel->setObjectName(QStringLiteral("monitorPanel"));
     auto* monitorCol = new QVBoxLayout(monitorPanel);
-    monitorCol->setContentsMargins(6, 6, 6, 6);
-    monitorCol->setSpacing(5);
+    monitorCol->setContentsMargins(7, 7, 7, 7);
+    monitorCol->setSpacing(7);
     auto* monitorHeader = new QHBoxLayout;
-    monitorHeader->setContentsMargins(7, 0, 5, 0);
+    monitorHeader->setContentsMargins(7, 1, 3, 1);
     monitorHeader->addWidget(
         makeSectionTitle(QStringLiteral("MULTIVIEW"),
-                         QStringLiteral("INPUT MATRIX  /  PROGRAM  /  PREVIEW")));
+                         QStringLiteral("L-CLICK PREVIEW  /  R-CLICK PROGRAM")));
     monitorHeader->addStretch(1);
+    auto* outputDeck = new QFrame;
+    outputDeck->setObjectName(QStringLiteral("outputDeck"));
+    auto* outputRow = new QHBoxLayout(outputDeck);
+    outputRow->setContentsMargins(7, 3, 4, 3);
+    outputRow->setSpacing(5);
     auto* outputLabel = new QLabel(QStringLiteral("OUTPUT FORMAT"));
     outputLabel->setObjectName(QStringLiteral("eyebrow"));
-    monitorHeader->addWidget(outputLabel);
+    outputRow->addWidget(outputLabel);
 
     outputResolution_ = new QComboBox;
     outputResolution_->setObjectName(QStringLiteral("outputResolution"));
@@ -637,7 +808,7 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
                                        Qt::UserRole + 1);
     }
     outputResolution_->setCurrentIndex(resolutionIndex);
-    monitorHeader->addWidget(outputResolution_);
+    outputRow->addWidget(outputResolution_);
 
     outputFrameRate_ = new QComboBox;
     outputFrameRate_->setObjectName(QStringLiteral("outputFrameRate"));
@@ -660,11 +831,12 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
                                       Qt::UserRole + 1);
     }
     outputFrameRate_->setCurrentIndex(rateIndex);
-    monitorHeader->addWidget(outputFrameRate_);
+    outputRow->addWidget(outputFrameRate_);
 
     outputFormatState_ = new QLabel;
     outputFormatState_->setObjectName(QStringLiteral("formatState"));
-    monitorHeader->addWidget(outputFormatState_);
+    outputRow->addWidget(outputFormatState_);
+    monitorHeader->addWidget(outputDeck);
     auto outputChanged = [this](int) {
         refreshOutputFormatState();
         saveShow();
@@ -697,8 +869,8 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     // local to the scroll area instead of letting it inflate the whole window
     // and squeeze the persistent header on smaller displays.
     switcherRow->setSizeConstraint(QLayout::SetNoConstraint);
-    switcherRow->setContentsMargins(10, 10, 10, 10);
-    switcherRow->setSpacing(10);
+    switcherRow->setContentsMargins(8, 8, 8, 8);
+    switcherRow->setSpacing(8);
 
     auto* sourceTabs = new QTabWidget;
     sourceTabs->setObjectName(QStringLiteral("workspaceTabs"));
@@ -834,8 +1006,8 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
 
     // Transition controls and T-bar share a module, mirroring a hardware M/E.
     auto* transition = makeModule("blue");
-    transition->setMinimumWidth(350);
-    transition->setMaximumWidth(390);
+    transition->setMinimumWidth(315);
+    transition->setMaximumWidth(355);
     auto* transitionRow = new QHBoxLayout(transition);
     transitionRow->setContentsMargins(11, 9, 11, 9);
     transitionRow->setSpacing(12);
@@ -880,6 +1052,7 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     ftbBtn_->setProperty("active", false);
     connect(ftbBtn_, &QPushButton::clicked, &bridge_, &EngineBridge::fadeToBlack);
     transitionControls->addWidget(ftbBtn_);
+    transitionControls->addStretch(1);
     transitionRow->addLayout(transitionControls, 1);
 
     auto* tbarCol = new QVBoxLayout;
@@ -889,6 +1062,7 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     tbarTag->setAlignment(Qt::AlignCenter);
     tbarCol->addWidget(tbarTag);
     tbar_ = new QSlider(Qt::Vertical);
+    tbar_->setObjectName(QStringLiteral("tBar"));
     tbar_->setRange(0, 1000);
     tbar_->setMinimumHeight(92);
     tbar_->setToolTip(QStringLiteral("Drag for a manual transition"));
@@ -955,14 +1129,15 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
                 });
     }
     keyersCol->addLayout(cards);
-    keyers->setMinimumWidth(390);
-    keyers->setMaximumWidth(430);
+    keyersCol->addStretch(1);
+    keyers->setMinimumWidth(350);
+    keyers->setMaximumWidth(395);
     switcherRow->addWidget(keyers);
 
     workSplitter->addWidget(controlSurface);
     workSplitter->setStretchFactor(0, 5);
     workSplitter->setStretchFactor(1, 4);
-    workSplitter->setSizes({475, 365});
+    workSplitter->setSizes({470, 365});
     root->addWidget(workSplitter, 1);
 
     status_ = new QLabel;
@@ -1203,7 +1378,7 @@ void MainWindow::refreshRecordingState() {
     };
     refresh(state, recordBtn_, recordState_, QStringLiteral("●  RECORD"));
     refresh(cleanState, cleanRecordBtn_, cleanRecordState_,
-            QStringLiteral("●  CLEAN REC"));
+            QStringLiteral("●  CLEAN"));
 }
 
 void MainWindow::refreshBusReadouts() {

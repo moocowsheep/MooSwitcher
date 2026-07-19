@@ -43,6 +43,7 @@ private:
     QStringList inputNames_;
     QVector<QRectF> inputHitRects_;
     int inputCount_ = 1;
+    int hoveredSource_ = -1;
 };
 
 }  // namespace moo::ui

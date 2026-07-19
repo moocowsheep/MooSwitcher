@@ -1,6 +1,7 @@
 #include "ui/MultiviewWidget.h"
 
 #include <QFontMetrics>
+#include <QLinearGradient>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -26,23 +27,26 @@ void MultiviewWidget::setFrame(QImage img) {
 void MultiviewWidget::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.fillRect(rect(), QColor(5, 7, 9));
+    QLinearGradient surface(0, 0, 0, height());
+    surface.setColorAt(0.0, QColor(8, 12, 17));
+    surface.setColorAt(1.0, QColor(4, 7, 10));
+    painter.fillRect(rect(), surface);
 
     // A restrained alignment grid keeps the monitor intentional while the
     // engine is starting, and remains visible only in letterboxed margins.
-    painter.setPen(QPen(QColor(26, 32, 39), 1));
+    painter.setPen(QPen(QColor(22, 30, 38), 1));
     constexpr int kGrid = 48;
     for (int x = 0; x < width(); x += kGrid) painter.drawLine(x, 0, x, height());
     for (int y = 0; y < height(); y += kGrid) painter.drawLine(0, y, width(), y);
 
-    const QRectF stage = rect().adjusted(5, 5, -5, -5);
-    painter.setPen(QPen(QColor(47, 57, 68), 1));
+    const QRectF stage = rect().adjusted(4, 4, -4, -4);
+    painter.setPen(QPen(QColor(49, 65, 79), 1));
     painter.setBrush(Qt::NoBrush);
     painter.drawRoundedRect(stage, 4, 4);
 
     if (frame_.isNull()) {
         inputHitRects_.clear();
-        painter.setPen(QColor(93, 106, 120));
+        painter.setPen(QColor(112, 130, 147));
         QFont title = painter.font();
         title.setPointSize(12);
         title.setBold(true);
@@ -55,7 +59,7 @@ void MultiviewWidget::paintEvent(QPaintEvent*) {
         detail.setBold(false);
         detail.setLetterSpacing(QFont::AbsoluteSpacing, 0.2);
         painter.setFont(detail);
-        painter.setPen(QColor(65, 76, 88));
+        painter.setPen(QColor(73, 89, 104));
         painter.drawText(rect().adjusted(0, 23, 0, 0), Qt::AlignCenter,
                          QStringLiteral("Video surfaces will appear when the engine publishes a frame"));
         return;
@@ -98,6 +102,10 @@ void MultiviewWidget::paintEvent(QPaintEvent*) {
     const QRect inputDestination(QPoint(6, 6), inputSize);
 
     const auto drawBank = [&](const QRect& destination, const QRect& source) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0, 0, 0, 120));
+        painter.drawRoundedRect(QRectF(destination).translated(0, 3), 4, 4);
+
         QPainterPath clip;
         clip.addRoundedRect(QRectF(destination), 3, 3);
         painter.save();
@@ -106,7 +114,7 @@ void MultiviewWidget::paintEvent(QPaintEvent*) {
         painter.drawImage(destination, frame_, source);
         painter.restore();
 
-        painter.setPen(QPen(QColor(75, 87, 99), 1));
+        painter.setPen(QPen(QColor(76, 94, 109), 1));
         painter.setBrush(Qt::NoBrush);
         painter.drawRoundedRect(
             QRectF(destination).adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
@@ -129,7 +137,6 @@ void MultiviewWidget::paintEvent(QPaintEvent*) {
     painter.setClipRect(inputDestination);
     painter.setRenderHint(QPainter::TextAntialiasing);
     painter.setFont(labelFont);
-    painter.setPen(QColor(201, 208, 216));
     inputHitRects_.clear();
     inputHitRects_.reserve(inputCount_);
     for (int i = 0; i < inputCount_; ++i) {
@@ -151,6 +158,13 @@ void MultiviewWidget::paintEvent(QPaintEvent*) {
             inputDestination.top() +
                 (sourceY + sourceH - kInputLabelHeight) * scaleY,
             sourceW * scaleX, kInputLabelHeight * scaleY);
+        painter.fillRect(labelRect, QColor(8, 13, 18, 238));
+        painter.fillRect(QRectF(labelRect.left(), labelRect.top(),
+                                labelRect.width(), 1),
+                         QColor(61, 87, 106));
+        painter.fillRect(QRectF(labelRect.left(), labelRect.top(), 3,
+                                labelRect.height()),
+                         QColor(64, 153, 194));
         const QRectF textRect = labelRect.adjusted(7, 0, -5, 0);
         QString name = i < inputNames_.size()
                            ? inputNames_[i]
@@ -160,9 +174,16 @@ void MultiviewWidget::paintEvent(QPaintEvent*) {
             QStringLiteral("%1  %2")
                 .arg(i + 1, 2, 10, QLatin1Char('0'))
                 .arg(name.toUpper());
+        painter.setPen(QColor(218, 226, 234));
         painter.drawText(
             textRect, Qt::AlignLeft | Qt::AlignVCenter,
             metrics.elidedText(text, Qt::ElideRight, int(textRect.width())));
+    }
+    if (hoveredSource_ >= 0 && hoveredSource_ < inputHitRects_.size()) {
+        painter.setPen(QPen(QColor(91, 191, 232), 2));
+        painter.setBrush(QColor(73, 163, 205, 18));
+        painter.drawRoundedRect(
+            inputHitRects_[hoveredSource_].adjusted(2, 2, -2, -2), 3, 3);
     }
     painter.restore();
 
@@ -173,12 +194,23 @@ void MultiviewWidget::paintEvent(QPaintEvent*) {
     const int outputCellHeight = ((frame_.height() - kOutputGap) / 2) & ~1;
     const qreal outputScaleY =
         qreal(outputDestination.height()) / outputSource.height();
-    auto drawOutputLabel = [&](const QString& text, int sourceY) {
+    auto drawOutputLabel = [&](const QString& text, int sourceBottom,
+                               const QColor& accent) {
+        constexpr qreal kLabelHeight = 22.0;
+        const qreal bottom =
+            outputDestination.top() + sourceBottom * outputScaleY;
         const QRectF labelRect(
-            outputDestination.left(),
-            outputDestination.top() + sourceY * outputScaleY,
-            outputDestination.width(), kInputLabelHeight * outputScaleY);
-        const QRectF textRect = labelRect.adjusted(7, 0, -5, 0);
+            outputDestination.left(), bottom - kLabelHeight,
+            outputDestination.width(), kLabelHeight);
+        painter.fillRect(labelRect, QColor(7, 11, 15, 240));
+        painter.fillRect(QRectF(labelRect.left(), labelRect.top(), 4,
+                                labelRect.height()),
+                         accent);
+        painter.fillRect(QRectF(labelRect.left(), labelRect.top(),
+                                labelRect.width(), 1),
+                         accent.darker(135));
+        const QRectF textRect = labelRect.adjusted(9, 0, -5, 0);
+        painter.setPen(accent.lighter(130));
         painter.drawText(
             textRect, Qt::AlignLeft | Qt::AlignVCenter,
             metrics.elidedText(text, Qt::ElideRight, int(textRect.width())));
@@ -188,11 +220,10 @@ void MultiviewWidget::paintEvent(QPaintEvent*) {
     painter.setClipRect(outputDestination);
     painter.setRenderHint(QPainter::TextAntialiasing);
     painter.setFont(labelFont);
-    painter.setPen(QColor(201, 208, 216));
-    drawOutputLabel(QStringLiteral("PROGRAM"),
-                    outputCellHeight - kInputLabelHeight);
-    drawOutputLabel(QStringLiteral("PREVIEW"),
-                    frame_.height() - kInputLabelHeight);
+    drawOutputLabel(QStringLiteral("PROGRAM"), outputCellHeight,
+                    QColor(238, 65, 77));
+    drawOutputLabel(QStringLiteral("PREVIEW"), frame_.height(),
+                    QColor(53, 192, 120));
     painter.restore();
 }
 
@@ -220,12 +251,20 @@ void MultiviewWidget::mousePressEvent(QMouseEvent* event) {
 }
 
 void MultiviewWidget::mouseMoveEvent(QMouseEvent* event) {
-    setCursor(sourceAt(event->position()) >= 0 ? Qt::PointingHandCursor
-                                               : Qt::ArrowCursor);
+    const int hovered = sourceAt(event->position());
+    if (hovered != hoveredSource_) {
+        hoveredSource_ = hovered;
+        update();
+    }
+    setCursor(hovered >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
     QWidget::mouseMoveEvent(event);
 }
 
 void MultiviewWidget::leaveEvent(QEvent* event) {
+    if (hoveredSource_ >= 0) {
+        hoveredSource_ = -1;
+        update();
+    }
     unsetCursor();
     QWidget::leaveEvent(event);
 }
