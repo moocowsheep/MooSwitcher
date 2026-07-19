@@ -8,7 +8,8 @@ Status: **v1 complete (M0–M6), v2 frame sync landed**. 8K-hardened engine (30-
 tick overruns, 1.5-frame latency, <2 cores full pipeline, NVENC 54%), full audio mixer (A/V
 within ±8 ms on NDI and SRT paths at 1080p and 8K), live source picker (swap NDI/SRT sources
 per input mid-show), show-file persistence (restart restores everything), health banners,
-runtime counters in the GUI. Per-input **frame sync**: re-times a source onto the output tick
+runtime counters in the GUI, HEVC/AAC program recording, and paced local clip
+playback with transport controls. Per-input **frame sync**: re-times a source onto the output tick
 grid (1–4 frame buffer absorbs bursty delivery, rate slip becomes counted repeats/drops) and
 auto-aligns the input's audio to the re-timed video — the cross-session A/V phase lottery
 collapses to a constant (design + measurements: `docs/design-framesync.md`,
@@ -52,6 +53,22 @@ Select the program output resolution and progressive frame rate from the **OUTPU
 controls above the multiview. The choice is saved immediately to the show file; restart
 MooSwitcher when the amber **RESTART TO APPLY** badge appears. The selected format drives
 both NDI and SRT program outputs on the next start.
+
+Record the program mix with the red **RECORD** control in the top bar. Recordings
+are HEVC video plus 48 kHz stereo AAC in a finalized Matroska (`.mkv`) file;
+encoding and disk I/O run off the render thread, and recorder backpressure never
+stalls program. Headless: `--record PATH.mkv [--record-bitrate KBPS]` (bitrate
+defaults from the output format).
+
+Local H.264/HEVC clips can occupy any input: open the input source picker and
+choose **OPEN MEDIA**, then use the **MEDIA** tab for play/pause, restart, and
+loop controls. The clip is timestamp-paced in real time, decoded through NVDEC,
+and its audio enters the normal mixer lane. The media path and loop setting
+persist in the show file; playback starts from the beginning after an application
+restart. Headless: `--media-input PATH`. This first media-player cut intentionally
+does not yet include playlists, trim points, speed control, still images, or
+instant replay.
+Design and validation notes: `docs/design-recorder-media.md`.
 
 Two downstream keyers composite graphics with **native alpha (NDI/OMT UYVA)** over program —
 point a DSK at an input carrying alpha (CasparCG, OBS with alpha, `moo-testgen --uyva`), and

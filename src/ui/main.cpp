@@ -29,6 +29,7 @@ int main(int argc, char** argv) {
 
     moo::EngineConfig& cfg = show.cfg;
     QString shotPath;
+    QString recordPath;
     double shotDelayS = 6.0;
     int shotTab = 0;
     bool cliInputs = false;
@@ -42,6 +43,9 @@ int main(int argc, char** argv) {
             addInput(moo::InputSpec::Type::Ndi, args[++i]);
         else if (args[i] == QStringLiteral("--srt-input") && i + 1 < args.size())
             addInput(moo::InputSpec::Type::Srt, args[++i]);
+        else if (args[i] == QStringLiteral("--media-input") &&
+                 i + 1 < args.size())
+            addInput(moo::InputSpec::Type::Media, args[++i]);
         else if (args[i] == QStringLiteral("--validate"))
             cfg.validation = true;
         else if (args[i] == QStringLiteral("--show") && i + 1 < args.size()) {
@@ -54,6 +58,11 @@ int main(int argc, char** argv) {
             cfg.srtUrl = args[++i].toStdString();
         else if (args[i] == QStringLiteral("--srt-bitrate") && i + 1 < args.size())
             cfg.srtBitrateKbps = args[++i].toInt();
+        else if (args[i] == QStringLiteral("--record") && i + 1 < args.size())
+            recordPath = args[++i];
+        else if (args[i] == QStringLiteral("--record-bitrate") &&
+                 i + 1 < args.size())
+            cfg.recordBitrateKbps = args[++i].toInt();
         else if (args[i] == QStringLiteral("--show-file"))
             ++i;  // consumed above
         else if (args[i] == QStringLiteral("--screenshot") && i + 1 < args.size())
@@ -74,6 +83,8 @@ int main(int argc, char** argv) {
         MOO_LOGE("engine start failed");
         return 1;
     }
+    if (!recordPath.isEmpty())
+        engine.requestRecording(recordPath.toStdString());
 
     // Control-surface and mixer state restore.
     if (auto* aud = engine.audio())

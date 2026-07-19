@@ -1,6 +1,9 @@
 #include "ui/MainWindow.h"
 
 #include <QDateTime>
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -8,6 +11,7 @@
 #include <QScrollArea>
 #include <QShortcut>
 #include <QSplitter>
+#include <QStandardPaths>
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -55,7 +59,7 @@ QLabel#clock {
     font-size: 13px;
     font-weight: 600;
 }
-QLabel#healthBadge, QLabel#busReadout, QLabel#formatState {
+QLabel#healthBadge, QLabel#busReadout, QLabel#formatState, QLabel#recordState {
     background: #10151b;
     border: 1px solid #303a45;
     border-radius: 5px;
@@ -70,6 +74,8 @@ QLabel#busReadout[bus="program"] { color: #ff737a; border-color: #713038; }
 QLabel#busReadout[bus="preview"] { color: #70d99a; border-color: #275f44; }
 QLabel#formatState[state="active"] { color: #60dfa0; border-color: #22553f; }
 QLabel#formatState[state="pending"] { color: #ffc766; border-color: #70551e; }
+QLabel#recordState[state="recording"] { color: #ff737a; border-color: #713038; }
+QLabel#recordState[state="error"] { color: #ffc766; border-color: #70551e; }
 QLabel#alertBanner {
     background: #40191d;
     color: #ffb8bc;
@@ -163,6 +169,21 @@ QPushButton#actionButton:pressed, QPushButton#keyButton:pressed {
 QPushButton#actionButton[action="cut"] { color: #ffd56c; }
 QPushButton#actionButton[action="auto"] { color: #7bc7f0; }
 QPushButton#actionButton[action="ftb"] { color: #ff777f; }
+QPushButton#recordButton {
+    background: #171d24;
+    border: 1px solid #713038;
+    border-radius: 5px;
+    color: #ff8a90;
+    font-size: 10px;
+    font-weight: 850;
+    min-height: 28px;
+    padding: 3px 10px;
+}
+QPushButton#recordButton:checked {
+    background: #8a222c;
+    border-color: #ff5963;
+    color: white;
+}
 QPushButton#actionButton[active="true"] {
     background: #254c65; border-color: #62b7e5; color: white;
 }
@@ -313,6 +334,8 @@ QString displayName(QString ref) {
         ref = QStringLiteral("SRT · ") + ref.mid(6);
     else if (ref.startsWith(QStringLiteral("omt://"), Qt::CaseInsensitive))
         ref = QStringLiteral("OMT · ") + ref.mid(6);
+    else if (QFileInfo(ref).isAbsolute())
+        ref = QStringLiteral("MEDIA · ") + QFileInfo(ref).fileName();
     if (ref.isEmpty()) return QStringLiteral("NO SOURCE");
     return ref;
 }
@@ -450,6 +473,47 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     previewReadout_->setProperty("bus", "preview");
     topRow->addWidget(programReadout_);
     topRow->addWidget(previewReadout_);
+
+    recordBtn_ = new QPushButton(QStringLiteral("●  RECORD"));
+    recordBtn_->setObjectName(QStringLiteral("recordButton"));
+    recordBtn_->setCheckable(true);
+    recordBtn_->setToolTip(
+        QStringLiteral("Record the program mix as HEVC/AAC Matroska"));
+    topRow->addWidget(recordBtn_);
+    recordState_ = new QLabel(QStringLiteral("IDLE"));
+    recordState_->setObjectName(QStringLiteral("recordState"));
+    recordState_->setProperty("state", "idle");
+    topRow->addWidget(recordState_);
+    connect(recordBtn_, &QPushButton::clicked, this, [this](bool checked) {
+        if (!checked) {
+            bridge_.stopRecording();
+            recordState_->setText(QStringLiteral("STOPPING…"));
+            setVisualState(recordState_, "state", "pending");
+            return;
+        }
+
+        QString directory =
+            QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+        if (directory.isEmpty()) directory = QDir::homePath();
+        const QString suggested =
+            QDir(directory).filePath(
+                QStringLiteral("MooSwitcher-%1.mkv")
+                    .arg(QDateTime::currentDateTime().toString(
+                        QStringLiteral("yyyyMMdd-HHmmss"))));
+        const QString path = QFileDialog::getSaveFileName(
+            this, QStringLiteral("Record program"), suggested,
+            QStringLiteral("Matroska video (*.mkv)"));
+        if (path.isEmpty()) {
+            recordBtn_->setChecked(false);
+            return;
+        }
+        bridge_.startRecording(
+            path.endsWith(QStringLiteral(".mkv"), Qt::CaseInsensitive)
+                ? path
+                : path + QStringLiteral(".mkv"));
+        recordState_->setText(QStringLiteral("STARTING…"));
+        setVisualState(recordState_, "state", "pending");
+    });
 
     healthBadge_ = new QLabel(QStringLiteral("●  ENGINE ONLINE"));
     healthBadge_->setObjectName(QStringLiteral("healthBadge"));
@@ -658,6 +722,59 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
         connect(&bridge_, &EngineBridge::inputNamesChanged, mixer,
                 &MixerPanel::onInputNames);
     }
+
+    auto* mediaPanel = new QWidget;
+    auto* mediaRoot = new QVBoxLayout(mediaPanel);
+    mediaRoot->setContentsMargins(11, 9, 11, 10);
+    mediaRoot->setSpacing(8);
+    mediaRoot->addWidget(makeSectionTitle(
+        QStringLiteral("MEDIA PLAYERS"),
+        QStringLiteral("LOCAL H.264 / HEVC CLIPS PATCHED AS INPUTS")));
+    for (int i = 0; i < bridge_.inputCount(); ++i) {
+        auto* card = new QFrame;
+        card->setObjectName(QStringLiteral("modulePanel"));
+        auto* row = new QHBoxLayout(card);
+        row->setContentsMargins(10, 7, 10, 7);
+        row->setSpacing(8);
+
+        MediaRow controls;
+        controls.name = new QLabel;
+        controls.name->setObjectName(QStringLiteral("sectionTitle"));
+        controls.name->setMinimumWidth(220);
+        row->addWidget(controls.name, 1);
+        controls.time = new QLabel(QStringLiteral("— / —"));
+        controls.time->setObjectName(QStringLiteral("subtleText"));
+        controls.time->setMinimumWidth(110);
+        controls.time->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        row->addWidget(controls.time);
+        controls.restart = new QPushButton(QStringLiteral("↺  RESTART"));
+        controls.restart->setObjectName(QStringLiteral("actionButton"));
+        row->addWidget(controls.restart);
+        controls.play = new QPushButton(QStringLiteral("PAUSE"));
+        controls.play->setObjectName(QStringLiteral("actionButton"));
+        controls.play->setCheckable(true);
+        row->addWidget(controls.play);
+        controls.loop = new QPushButton(QStringLiteral("LOOP"));
+        controls.loop->setObjectName(QStringLiteral("actionButton"));
+        controls.loop->setCheckable(true);
+        row->addWidget(controls.loop);
+
+        connect(controls.play, &QPushButton::clicked, &bridge_,
+                [&bridge = bridge_, i](bool playing) {
+                    bridge.setMediaPlaying(i, playing);
+                });
+        connect(controls.restart, &QPushButton::clicked, &bridge_,
+                [&bridge = bridge_, i] { bridge.restartMedia(i); });
+        connect(controls.loop, &QPushButton::clicked, &bridge_,
+                [&bridge = bridge_, i](bool loop) {
+                    bridge.setMediaLoop(i, loop);
+                });
+        mediaRows_.push_back(controls);
+        mediaRoot->addWidget(card);
+    }
+    mediaRoot->addStretch(1);
+    sourceTabs->addTab(mediaPanel, QStringLiteral("MEDIA"));
+
     switcherRow->addWidget(sourceTabs, 1);
 
     // Transition controls and T-bar share a module, mirroring a hardware M/E.
@@ -850,6 +967,16 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
         saver->start();
     }
 
+    refreshMediaControls();
+    refreshRecordingState();
+    auto* mediaTimer = new QTimer(this);
+    mediaTimer->setInterval(250);
+    connect(mediaTimer, &QTimer::timeout, this, [this] {
+        refreshMediaControls();
+        refreshRecordingState();
+    });
+    mediaTimer->start();
+
     setCentralWidget(central);
     onInputNames(inputNames);
     refreshBusReadouts();
@@ -870,9 +997,15 @@ ShowFile::State MainWindow::collectState() const {
     for (int i = 0; i < bridge_.inputCount(); ++i) {
         // The engine knows each input's true type; re-deriving it from the
         // ref would misfile OMT discovery names (no scheme) as NDI.
-        state.cfg.inputs.push_back({InputSpec::Type(bridge_.inputType(i)),
-                                    bridge_.inputRef(i).toStdString(),
-                                    bridge_.inputSyncFrames(i)});
+        InputSpec spec{InputSpec::Type(bridge_.inputType(i)),
+                       bridge_.inputRef(i).toStdString(),
+                       bridge_.inputSyncFrames(i)};
+        const auto media = bridge_.mediaState(i);
+        if (media.available) {
+            spec.mediaPlaying = media.playing;
+            spec.mediaLoop = media.loop;
+        }
+        state.cfg.inputs.push_back(std::move(spec));
     }
     state.program = lastProgram_ < 0 ? 0 : lastProgram_;
     state.preview = lastPreview_ < 0 ? 1 : lastPreview_;
@@ -926,6 +1059,75 @@ void MainWindow::refreshOutputFormatState() {
     setVisualState(outputFormatState_, "state", pending ? "pending" : "active");
 }
 
+void MainWindow::refreshMediaControls() {
+    auto formatTime = [](int64_t milliseconds) {
+        if (milliseconds <= 0) return QStringLiteral("00:00");
+        const int64_t seconds = milliseconds / 1000;
+        return QStringLiteral("%1:%2")
+            .arg(seconds / 60, 2, 10, QLatin1Char('0'))
+            .arg(seconds % 60, 2, 10, QLatin1Char('0'));
+    };
+
+    for (int i = 0; i < int(mediaRows_.size()); ++i) {
+        auto& row = mediaRows_[size_t(i)];
+        const auto state = bridge_.mediaState(i);
+        const bool available = state.available;
+        row.name->setText(
+            available
+                ? QStringLiteral("INPUT %1   ·   %2")
+                      .arg(i + 1, 2, 10, QLatin1Char('0'))
+                      .arg(displayName(bridge_.inputRef(i)))
+                : QStringLiteral("INPUT %1   ·   NO MEDIA CLIP")
+                      .arg(i + 1, 2, 10, QLatin1Char('0')));
+        row.time->setText(
+            available
+                ? QStringLiteral("%1 / %2")
+                      .arg(formatTime(state.positionMs),
+                           formatTime(state.durationMs))
+                : QStringLiteral("— / —"));
+        for (auto* button : {row.play, row.restart, row.loop})
+            button->setEnabled(available);
+
+        row.play->blockSignals(true);
+        row.play->setChecked(available && state.playing);
+        row.play->setText(state.playing ? QStringLiteral("PAUSE")
+                                        : state.atEnd ? QStringLiteral("REPLAY")
+                                                      : QStringLiteral("PLAY"));
+        row.play->blockSignals(false);
+        row.loop->blockSignals(true);
+        row.loop->setChecked(available && state.loop);
+        row.loop->blockSignals(false);
+        setVisualState(row.play, "active", available && state.playing);
+        setVisualState(row.loop, "active", available && state.loop);
+    }
+}
+
+void MainWindow::refreshRecordingState() {
+    const auto state = bridge_.recordingState();
+    if (state.pending) return;  // retain STARTING/STOPPING feedback
+
+    recordBtn_->blockSignals(true);
+    recordBtn_->setChecked(state.active);
+    recordBtn_->setText(state.active ? QStringLiteral("■  STOP")
+                                     : QStringLiteral("●  RECORD"));
+    recordBtn_->blockSignals(false);
+
+    if (state.error) {
+        recordState_->setText(QStringLiteral("RECORD ERROR"));
+        recordState_->setToolTip(QString::fromStdString(state.path));
+        setVisualState(recordState_, "state", "error");
+    } else if (state.active) {
+        recordState_->setText(
+            QStringLiteral("REC  %1").arg(state.frames));
+        recordState_->setToolTip(QString::fromStdString(state.path));
+        setVisualState(recordState_, "state", "recording");
+    } else {
+        recordState_->setText(QStringLiteral("IDLE"));
+        recordState_->setToolTip({});
+        setVisualState(recordState_, "state", "idle");
+    }
+}
+
 void MainWindow::refreshBusReadouts() {
     auto nameAt = [this](int index) {
         return index >= 0 && index < inputNames_.size()
@@ -971,6 +1173,7 @@ void MainWindow::onInputNames(const QStringList& refs) {
                            .arg(name.left(12)));
     }
     refreshBusReadouts();
+    refreshMediaControls();
 }
 
 void MainWindow::onState(int program, int preview, bool inTransition, bool ftb,

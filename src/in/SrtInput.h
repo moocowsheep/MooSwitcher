@@ -18,18 +18,22 @@ extern "C" {
 
 namespace moo {
 
-// SRT/HEVC (or H.264) ingest: libavformat reads the TS, NVDEC decodes into
-// CUDA frames, one device-to-device copy lands NV12 planes in an Nv12Ring's
+// FFmpeg/NVDEC ingest for live SRT or paced local media files. libavformat
+// reads the source, NVDEC decodes into CUDA frames, and one device-to-device
+// copy lands NV12 planes in an Nv12Ring's
 // exported staging buffer, and Vulkan copies to Y/UV images. Decode never
-// touches the CPU pixel path. The TS's audio stream (if any) is decoded on
+// touches the CPU pixel path. The source's audio stream (if any) is decoded on
 // the CPU and swresampled to the mixer's 48 kHz stereo f32. Reconnects with
-// backoff; same latest-frame mailbox contract as the NDI receiver.
+// backoff for SRT; local files are paced from their media timestamps and
+// expose play/pause/restart/loop transport through IInputSource.
 class SrtInput : public IInputSource {
 public:
     // syncFrames >= 0 enables the frame-sync feed (and sizes the NV12 ring
     // for that many queued frames); -1 = plain latest-frame input.
     SrtInput(gpu::VkEngine& eng, gpu::Queue& uploadQueue, media::CudaCtx& cuda,
-             std::string url, int index, int syncFrames = -1);
+             std::string url, int index, int syncFrames = -1,
+             bool mediaMode = false, bool mediaPlaying = true,
+             bool mediaLoop = true);
     ~SrtInput() override;
 
     std::optional<Mailbox::Item> newer(uint64_t lastSeq) const override {
@@ -39,6 +43,10 @@ public:
         return mailbox_.takeNewerCandidates(lastSeq, out);
     }
     Status status() const override;
+    MediaState mediaState() const override;
+    void setMediaPlaying(bool playing) override;
+    void setMediaLoop(bool loop) override;
+    void restartMedia() override;
 
     void attachAudioSink(audio::InputChannel* ch) override {
         audioSink_.store(ch, std::memory_order_release);
@@ -52,6 +60,8 @@ private:
     void closeStream();
     void handleFrame(AVFrame* f);
     void handleAudioFrame(AVFrame* f);
+    bool paceTimestamp(int streamIndex, int64_t timestamp,
+                       std::stop_token stop);
     static int interruptCb(void* opaque);
     static AVPixelFormat pickCuda(AVCodecContext*, const AVPixelFormat* fmts);
 
@@ -60,6 +70,7 @@ private:
     media::CudaCtx& cuda_;
     std::string url_;
     int index_;
+    const bool mediaMode_;
 
     AVBufferRef* hwDev_ = nullptr;
     AVFormatContext* ic_ = nullptr;
@@ -83,6 +94,16 @@ private:
     uint64_t pubSeq_ = 0;    // decode thread
     bool ptsSynth_ = false;  // decode thread; sticky per stream
     int64_t synthBaseNs_ = 0, synthK_ = 0, synthLastArrNs_ = 0;
+    std::atomic<bool> mediaPlaying_{true};
+    std::atomic<bool> mediaLoop_{true};
+    std::atomic<bool> mediaRestart_{false};
+    std::atomic<bool> mediaAtEnd_{false};
+    std::atomic<int64_t> mediaPositionMs_{0};
+    std::atomic<int64_t> mediaDurationMs_{0};
+    int64_t mediaFirstPtsNs_ = INT64_MIN;  // decode thread
+    int64_t mediaStartMonoNs_ = 0;
+    int64_t mediaPauseMonoNs_ = 0;
+    bool mediaWasPlaying_ = false;
     std::atomic<audio::InputChannel*> audioSink_{nullptr};
     std::atomic<bool> connected_{false};
     std::atomic<bool> stopFlag_{false};
@@ -91,6 +112,15 @@ private:
     VideoFormatDesc desc_{};
 
     std::jthread thread_;
+};
+
+class MediaInput final : public SrtInput {
+public:
+    MediaInput(gpu::VkEngine& eng, gpu::Queue& uploadQueue,
+               media::CudaCtx& cuda, std::string path, int index,
+               int syncFrames = -1, bool playing = true, bool loop = true)
+        : SrtInput(eng, uploadQueue, cuda, std::move(path), index, syncFrames,
+                   true, playing, loop) {}
 };
 
 }  // namespace moo

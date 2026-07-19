@@ -65,6 +65,31 @@ TEST_CASE("show file preserves the exact output format") {
     CHECK(restored.cfg.show.fpsD == 1001);
 }
 
+TEST_CASE("show file restores media inputs and loop mode") {
+    QTemporaryDir temporary;
+    REQUIRE(temporary.isValid());
+
+    ShowFile file(temporary.filePath(QStringLiteral("show.ini")));
+    ShowFile::State saved;
+    InputSpec media;
+    media.type = InputSpec::Type::Media;
+    media.ref = "/shows/roll-in.mkv";
+    media.syncFrames = -1;
+    media.mediaPlaying = false;  // pause is deliberately session-only
+    media.mediaLoop = false;
+    saved.cfg.inputs = {media};
+    file.save(saved);
+
+    ShowFile::State restored;
+    REQUIRE(file.load(restored));
+    REQUIRE(restored.cfg.inputs.size() == 1);
+    CHECK(restored.cfg.inputs[0].type == InputSpec::Type::Media);
+    CHECK(restored.cfg.inputs[0].ref == "/shows/roll-in.mkv");
+    CHECK(restored.cfg.inputs[0].syncFrames == -1);
+    CHECK(restored.cfg.inputs[0].mediaPlaying);
+    CHECK_FALSE(restored.cfg.inputs[0].mediaLoop);
+}
+
 TEST_CASE("output format badge tracks and saves pending selections") {
     (void)application();
 

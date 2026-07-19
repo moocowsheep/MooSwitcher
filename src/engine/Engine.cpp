@@ -4,11 +4,12 @@
 #include <cstring>
 
 #include "core/Font5x7.h"
-#include "engine/FrameSync.h"
-#include "in/SrtInput.h"
 #include "core/Log.h"
 #include "core/Stats.h"
+#include "engine/FrameSync.h"
+#include "in/SrtInput.h"
 #include "ndi/NdiLib.h"
+#include "out/FileRecorder.h"
 #include "out/NdiOutput.h"
 #include "out/SrtOutput.h"
 #ifdef MOO_HAVE_OMT
@@ -66,6 +67,56 @@ int Engine::inputSyncFrames(int i) const {
     return cfg_.inputs[size_t(i)].syncFrames;
 }
 
+IInputSource::MediaState Engine::inputMediaState(int i) const {
+    if (i < 0 || i >= int(inputs_.size())) return {};
+    return inputs_[size_t(i)]->mediaState();
+}
+
+void Engine::requestRecording(std::string path) {
+    {
+        std::lock_guard lock(recordM_);
+        requestedRecordingPath_ = path;
+    }
+    recordingError_.store(false, std::memory_order_relaxed);
+    recordingPending_.store(true, std::memory_order_release);
+
+    std::shared_ptr<FileRecorder> next;
+    if (!path.empty()) {
+        if (!started_.load(std::memory_order_acquire) || !cuda_.ok()) {
+            MOO_LOGE("record: engine/CUDA is not ready");
+        } else {
+            next = std::make_shared<FileRecorder>(
+                cuda_, *comp_, renderTL_, path, cfg_.show, cfg_.audio,
+                clock_.currentTick(), cfg_.recordBitrateKbps);
+            if (!next->ok()) next.reset();
+        }
+    }
+    const bool failed = !path.empty() && !next;
+    auto previous =
+        recorder_.exchange(std::move(next), std::memory_order_acq_rel);
+    recorderGeneration_.fetch_add(1, std::memory_order_release);
+    while (previous && previous.use_count() > 1)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    previous.reset();
+    recordingError_.store(failed, std::memory_order_relaxed);
+    recordingPending_.store(false, std::memory_order_release);
+}
+
+Engine::RecordingState Engine::recordingState() const {
+    RecordingState state;
+    const auto recorder = recorder_.load(std::memory_order_acquire);
+    state.active = recorder && recorder->ok();
+    state.pending = recordingPending_.load(std::memory_order_acquire);
+    state.error = recordingError_.load(std::memory_order_relaxed) ||
+                  (recorder && recorder->failed());
+    state.frames = recorder ? recorder->framesEncoded() : 0;
+    {
+        std::lock_guard lock(recordM_);
+        state.path = state.active ? recorder->path() : requestedRecordingPath_;
+    }
+    return state;
+}
+
 bool Engine::start(const EngineConfig& cfg) {
     cfg_ = cfg;
     if (!vk_.init(cfg.validation)) return false;
@@ -92,13 +143,17 @@ bool Engine::start(const EngineConfig& cfg) {
     const bool needCuda =
         !cfg_.srtUrl.empty() ||
         std::any_of(cfg_.inputs.begin(), cfg_.inputs.end(), [](const InputSpec& s) {
-            return s.type == InputSpec::Type::Srt;
+            return s.type == InputSpec::Type::Srt ||
+                   s.type == InputSpec::Type::Media;
         });
-    if (needCuda) {
-        if (!vk_.hasExternalMemoryFd || !cuda_.init(vk_.deviceUuid())) {
-            MOO_LOGE("SRT requested but Vulkan/CUDA interop unavailable");
-            return false;
-        }
+    // Warm CUDA before the render clock starts so pressing RECORD later does
+    // not pay context creation latency on-air. NDI-only operation still works
+    // if interop is unavailable; SRT/media require it.
+    const bool cudaAvailable =
+        vk_.hasExternalMemoryFd && cuda_.init(vk_.deviceUuid());
+    if (needCuda && !cudaAvailable) {
+        MOO_LOGE("SRT/media requested but Vulkan/CUDA interop unavailable");
+        return false;
     }
 
     finder_ = std::make_unique<NdiFinder>();
@@ -111,6 +166,10 @@ bool Engine::start(const EngineConfig& cfg) {
         if (spec.type == InputSpec::Type::Srt)
             inputs_.push_back(std::make_unique<SrtInput>(
                 vk_, q, cuda_, spec.ref, int(i), spec.syncFrames));
+        else if (spec.type == InputSpec::Type::Media)
+            inputs_.push_back(std::make_unique<MediaInput>(
+                vk_, q, cuda_, spec.ref, int(i), spec.syncFrames,
+                spec.mediaPlaying, spec.mediaLoop));
         else if (spec.type == InputSpec::Type::Omt)
 #ifdef MOO_HAVE_OMT
             inputs_.push_back(std::make_unique<OmtInput>(
@@ -160,6 +219,10 @@ bool Engine::start(const EngineConfig& cfg) {
                 [out = srtOut_.get()](const float* lr, int frames, int64_t s0) {
                     out->pushAudio(lr, frames, s0);
                 });
+        audio_->addSink([this](const float* lr, int frames, int64_t s0) {
+            const auto recorder = recorder_.load(std::memory_order_acquire);
+            if (recorder) recorder->pushAudio(lr, frames, s0);
+        });
     }
 
     // One origin for everything: video ticks, audio samples, and mux PTS all
@@ -285,6 +348,13 @@ bool Engine::buildLabelAtlas() {
 void Engine::stop() {
     if (!started_) return;
     renderThread_ = {};  // request stop + join
+    // End the file at the final rendered frame. Input teardown can take a
+    // receive timeout or two; leaving the recorder attached to the audio
+    // mixer during that interval would append seconds of audio-only tail.
+    auto recorder = recorder_.exchange({}, std::memory_order_acq_rel);
+    while (recorder && recorder.use_count() > 1)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    recorder.reset();
     inputs_.clear();     // capture threads stop writing the audio rings
     finder_.reset();
     audio_.reset();      // mixer stops; no more sink calls into the outputs
@@ -394,6 +464,7 @@ void Engine::renderLoop(std::stop_token st) {
     };
 
     uint64_t lastTallyKey = ~0ull;
+    uint64_t seenRecorderGeneration = 0;
 
     // The clock was started in start() (audio shares the origin); the first
     // few ticks may already be past, which sleepUntilTick treats as "go now".
@@ -424,8 +495,30 @@ void Engine::renderLoop(std::stop_token st) {
                 case Command::Type::SetDskFade:
                     switcher_.setDskDuration(c.arg, c.arg2);
                     break;
+                case Command::Type::MediaSetPlaying:
+                    if (c.arg >= 0 && c.arg < N) {
+                        inputs_[size_t(c.arg)]->setMediaPlaying(c.arg2 != 0);
+                        std::lock_guard lock(replaceM_);
+                        cfg_.inputs[size_t(c.arg)].mediaPlaying = c.arg2 != 0;
+                    }
+                    break;
+                case Command::Type::MediaRestart:
+                    if (c.arg >= 0 && c.arg < N) {
+                        inputs_[size_t(c.arg)]->restartMedia();
+                        std::lock_guard lock(replaceM_);
+                        cfg_.inputs[size_t(c.arg)].mediaPlaying = true;
+                    }
+                    break;
+                case Command::Type::MediaSetLoop:
+                    if (c.arg >= 0 && c.arg < N) {
+                        inputs_[size_t(c.arg)]->setMediaLoop(c.arg2 != 0);
+                        std::lock_guard lock(replaceM_);
+                        cfg_.inputs[size_t(c.arg)].mediaLoop = c.arg2 != 0;
+                    }
+                    break;
             }
         }
+
         // -- source picker: swap inputs between ticks --
         {
             std::vector<std::pair<int, InputSpec>> reps;
@@ -436,12 +529,14 @@ void Engine::renderLoop(std::stop_token st) {
             bool relabel = false;
             for (auto& [idx, spec] : reps) {
                 if (idx < 0 || idx >= N) continue;
-                if (spec.type == InputSpec::Type::Srt && !cuda_.ok()) {
+                if ((spec.type == InputSpec::Type::Srt ||
+                     spec.type == InputSpec::Type::Media) &&
+                    !cuda_.ok()) {
                     // One-time on-demand interop bring-up (a user action; the
                     // stall is bounded and counted as skips if it overruns).
                     if (!vk_.hasExternalMemoryFd || !cuda_.init(vk_.deviceUuid())) {
-                        MOO_LOGE("in%d: SRT source needs Vulkan/CUDA interop; "
-                                 "replace refused", idx);
+                        MOO_LOGE("in%d: SRT/media source needs Vulkan/CUDA "
+                                 "interop; replace refused", idx);
                         continue;
                     }
                 }
@@ -450,6 +545,10 @@ void Engine::renderLoop(std::stop_token st) {
                 if (spec.type == InputSpec::Type::Srt)
                     inputs_[size_t(idx)] = std::make_unique<SrtInput>(
                         vk_, q, cuda_, spec.ref, idx, spec.syncFrames);
+                else if (spec.type == InputSpec::Type::Media)
+                    inputs_[size_t(idx)] = std::make_unique<MediaInput>(
+                        vk_, q, cuda_, spec.ref, idx, spec.syncFrames,
+                        spec.mediaPlaying, spec.mediaLoop);
 #ifdef MOO_HAVE_OMT
                 else if (spec.type == InputSpec::Type::Omt)
                     inputs_[size_t(idx)] = std::make_unique<OmtInput>(
@@ -483,8 +582,12 @@ void Engine::renderLoop(std::stop_token st) {
                     cfg_.inputs[size_t(idx)] = spec;
                 }
                 relabel = true;
+                const char* kind =
+                    spec.type == InputSpec::Type::Srt     ? " (srt)"
+                    : spec.type == InputSpec::Type::Media ? " (media)"
+                                                         : "";
                 MOO_LOGI("in%d: replaced with '%s'%s", idx, spec.ref.c_str(),
-                         spec.type == InputSpec::Type::Srt ? " (srt)" : "");
+                         kind);
                 // The dtor joins the capture thread (bounded by its receive
                 // timeout) -- never on the render thread.
                 std::thread([o = std::move(old)]() mutable { o.reset(); })
@@ -698,13 +801,26 @@ void Engine::renderLoop(std::stop_token st) {
         }
         tj.packProgram = packSlot >= 0;
 
-        // -- NV12 pack for SRT: only when the encoder has released this FIF's
-        //    buffer AND the event ring has room. A slow/dead peer costs frames
-        //    on the SRT output only, never render ticks. --
-        bool doNv = false;
-        if (srtOut_) {
-            doNv = srtOut_->copiedValue(fif) >= nvPushed_[fif];
-            if (!doNv) Stats::counter("out.srt.fifBusySkips").add();
+        // -- Shared NV12 pack for SRT and recording: only when every active
+        //    consumer has released this FIF's buffer. A slow consumer costs
+        //    encoded-output frames, never render ticks. --
+        const auto recorder = recorder_.load(std::memory_order_acquire);
+        const uint64_t recorderGeneration =
+            recorderGeneration_.load(std::memory_order_acquire);
+        if (recorderGeneration != seenRecorderGeneration) {
+            recordNvPushed_.fill(0);
+            seenRecorderGeneration = recorderGeneration;
+        }
+        bool doNv = srtOut_ || recorder;
+        if (srtOut_ &&
+            srtOut_->copiedValue(fif) < srtNvPushed_[fif]) {
+            doNv = false;
+            Stats::counter("out.srt.fifBusySkips").add();
+        }
+        if (recorder &&
+            recorder->copiedValue(fif) < recordNvPushed_[fif]) {
+            doNv = false;
+            Stats::counter("record.fifBusySkips").add();
         }
         tj.packNv12 = doNv;
 
@@ -744,7 +860,10 @@ void Engine::renderLoop(std::stop_token st) {
         if (vk_.submit(vk_.gfx(), sd) != VK_SUCCESS) MOO_LOGE("render submit failed");
         fifValues_[fif] = value;
 
-        if (doNv && srtOut_->push({value, n, fif})) nvPushed_[fif] = value;
+        if (doNv && srtOut_ && srtOut_->push({value, n, fif}))
+            srtNvPushed_[fif] = value;
+        if (doNv && recorder && recorder->push({value, n, fif}))
+            recordNvPushed_[fif] = value;
 
         // -- pack readback on the down queue (chained on this render) --
         if (packSlot >= 0) {

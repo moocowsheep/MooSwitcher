@@ -35,6 +35,18 @@ public slots:
     void setDskFade(int k, int ticks) {
         engine_.post({Command::Type::SetDskFade, k, ticks, 0.f});
     }
+    void setMediaPlaying(int input, bool playing) {
+        engine_.post(
+            {Command::Type::MediaSetPlaying, input, playing ? 1 : 0, 0.f});
+    }
+    void restartMedia(int input) {
+        engine_.post({Command::Type::MediaRestart, input, 0, 0.f});
+    }
+    void setMediaLoop(int input, bool loop) {
+        engine_.post({Command::Type::MediaSetLoop, input, loop ? 1 : 0, 0.f});
+    }
+    void startRecording(QString path);
+    void stopRecording() { engine_.requestRecording({}); }
 
     // Audio mixer controls: straight to the mixer atomics (thread-safe).
     void setAudioGain(int input, float linearGain);
@@ -44,7 +56,7 @@ public slots:
     void setMasterDelayMs(int ms);
 
     // Source picker: type -1 = infer from the ref (srt://->SRT, omt://->OMT,
-    // anything else = NDI name substring); 0/1/2 force Ndi/Srt/Omt — needed
+    // anything else = NDI name substring); 0/1/2/3 force Ndi/Srt/Omt/Media
     // for OMT discovery names, which carry no scheme. syncFrames: -1 off,
     // 0 measure-only (auto A/V trim), 1..4 buffered. Takes effect at the
     // next render tick.
@@ -60,7 +72,14 @@ public:
     QStringList ndiSourceNames() const;
     QStringList omtSourceNames() const;  // empty when built without OMT
     QString inputRef(int input) const;
-    int inputType(int input) const;  // InputSpec::Type as int (0 Ndi/1 Srt/2 Omt)
+    // InputSpec::Type as int (0 NDI, 1 SRT, 2 OMT, 3 media).
+    int inputType(int input) const;
+    IInputSource::MediaState mediaState(int input) const {
+        return engine_.inputMediaState(input);
+    }
+    Engine::RecordingState recordingState() const {
+        return engine_.recordingState();
+    }
     int inputSyncFrames(int input) const { return engine_.inputSyncFrames(input); }
     int audioAutoTrimMs(int input) const;  // applied frame-sync trim readout
     int inputCount() const { return engine_.inputCount(); }

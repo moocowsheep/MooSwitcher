@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "core/Format.h"
 #include "core/Spsc.h"
@@ -38,6 +39,15 @@ public:
         VideoFormatDesc desc{};
     };
 
+    struct MediaState {
+        bool available = false;
+        bool playing = false;
+        bool loop = true;
+        bool atEnd = false;
+        int64_t positionMs = 0;
+        int64_t durationMs = 0;
+    };
+
     virtual ~IInputSource() = default;
     virtual std::optional<Mailbox::Item> newer(uint64_t lastSeq) const = 0;
 
@@ -54,6 +64,10 @@ public:
 
     virtual Status status() const = 0;
     virtual void setTally(bool /*onProgram*/, bool /*onPreview*/) {}
+    virtual MediaState mediaState() const { return {}; }
+    virtual void setMediaPlaying(bool /*playing*/) {}
+    virtual void setMediaLoop(bool /*loop*/) {}
+    virtual void restartMedia() {}
 
     // Non-null when the input was created with frame sync enabled: the
     // capture thread pushes every publish here too; the render tick drains

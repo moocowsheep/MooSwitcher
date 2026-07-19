@@ -12,7 +12,7 @@ extern "C" {
 namespace moo::media {
 
 bool FfmpegNvenc::open(CudaCtx& cuda, const VideoFormatDesc& show,
-                       int bitrateKbps) {
+                       int bitrateKbps, bool globalHeader) {
     cuda_ = &cuda;
     w_ = show.width;
     h_ = show.height;
@@ -55,6 +55,7 @@ bool FfmpegNvenc::open(CudaCtx& cuda, const VideoFormatDesc& show,
     enc_->time_base = {int(show.fpsD), int(show.fpsN)};
     enc_->framerate = {int(show.fpsN), int(show.fpsD)};
     enc_->pix_fmt = AV_PIX_FMT_CUDA;
+    if (globalHeader) enc_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     enc_->hw_frames_ctx = av_buffer_ref(hwFrames_);
     enc_->max_b_frames = 0;
     enc_->gop_size = std::max(1, int(fps * 2));  // IDR every ~2s

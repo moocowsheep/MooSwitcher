@@ -130,6 +130,7 @@ if(NDI_FOUND)
     src/in/SrtInput.cpp
     src/ndi/NdiFinder.cpp
     src/ndi/NdiReceiver.cpp
+    src/out/FileRecorder.cpp
     src/out/NdiOutput.cpp
     src/out/SrtOutput.cpp
   )

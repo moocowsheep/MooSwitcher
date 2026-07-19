@@ -17,6 +17,9 @@ struct Command {
         DskToggle,      // arg = keyer index
         SetDskSource,   // arg = keyer index, arg2 = source index
         SetDskFade,     // arg = keyer index, arg2 = duration ticks
+        MediaSetPlaying,  // arg = input index, arg2 = bool
+        MediaRestart,     // arg = input index
+        MediaSetLoop,     // arg = input index, arg2 = bool
     } type = Type::Cut;
     int arg = 0;
     int arg2 = 0;

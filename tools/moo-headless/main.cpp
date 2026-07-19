@@ -5,6 +5,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,9 @@ int main(int argc, char** argv) {
     double dumpEvery = 2.0;
     bool scriptedCuts = false;
     bool scriptedAutos = false;
+    std::string recordPath;
+    double recordStopAfter = -1;
+    bool recordStopped = false;
     std::vector<std::pair<int, int>> inputDelays;  // {input, ms} audio trims
     struct Replace {
         double afterS;
@@ -56,6 +60,9 @@ int main(int argc, char** argv) {
         } else if (a == "--omt-input") {
             if (const char* v = next())
                 cfg.inputs.push_back({moo::InputSpec::Type::Omt, v});
+        } else if (a == "--media-input") {
+            if (const char* v = next())
+                cfg.inputs.push_back({moo::InputSpec::Type::Media, v});
         } else if (a == "--show") {
             const char* v = next();
             if (!v || sscanf(v, "%dx%d", &cfg.show.width, &cfg.show.height) != 2)
@@ -81,6 +88,14 @@ int main(int argc, char** argv) {
         } else if (a == "--srt-bitrate") {
             const char* v = next();
             if (v) cfg.srtBitrateKbps = atoi(v);
+        } else if (a == "--record") {
+            if (const char* v = next()) recordPath = v;
+        } else if (a == "--record-bitrate") {
+            const char* v = next();
+            if (v) cfg.recordBitrateKbps = atoi(v);
+        } else if (a == "--record-stop-after") {
+            const char* v = next();
+            if (v) recordStopAfter = atof(v);
         } else if (a == "--no-audio") {
             cfg.audio = false;
         } else if (a == "--audio-delay") {
@@ -129,6 +144,8 @@ int main(int argc, char** argv) {
             fprintf(stderr,
                     "usage: moo-headless --input NAME [--input NAME ...] "
                     "[--srt-input URL] [--omt-input NAME_OR_URL] "
+                    "[--media-input PATH] [--record PATH.mkv] "
+                    "[--record-bitrate KBPS] [--record-stop-after S] "
                     "[--show WxH] [--duration S] [--dump-dir D] "
                     "[--dump-every S] [--cuts] [--no-audio] "
                     "[--audio-delay MS] [--framesync IDX[:FRAMES]] "
@@ -155,6 +172,7 @@ int main(int argc, char** argv) {
         MOO_LOGE("engine start failed");
         return 1;
     }
+    if (!recordPath.empty()) engine.requestRecording(recordPath);
     if (auto* aud = engine.audio())
         for (auto [idx, ms] : inputDelays)
             if (idx >= 0 && idx < aud->inputCount())
@@ -180,6 +198,12 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         const int64_t now = moo::MediaClock::nowNs();
 
+        if (!recordStopped && recordStopAfter >= 0 &&
+            now >= t0 + int64_t(recordStopAfter * 1e9)) {
+            recordStopped = true;
+            engine.requestRecording({});
+        }
+
         if (scriptedCuts && now >= nextCutNs) {
             engine.post({moo::Command::Type::Cut, 0, 0, 0.f});
             nextCutNs += 2'000'000'000;
@@ -191,6 +215,8 @@ int main(int argc, char** argv) {
                     r.ref.rfind("srt://", 0) == 0 ? moo::InputSpec::Type::Srt
                     : r.ref.rfind("omt://", 0) == 0
                         ? moo::InputSpec::Type::Omt
+                    : std::filesystem::is_regular_file(r.ref)
+                        ? moo::InputSpec::Type::Media
                         : moo::InputSpec::Type::Ndi;
                 engine.requestInputReplace(r.idx, {type, r.ref});
             }
@@ -228,6 +254,13 @@ int main(int argc, char** argv) {
             if (engine.srtFramesEncoded() || engine.srtConnected())
                 line += "  srt[" + std::string(engine.srtConnected() ? "up" : "down") +
                         " enc=" + std::to_string(engine.srtFramesEncoded()) + "]";
+            if (const auto rec = engine.recordingState();
+                rec.active || rec.pending || rec.error)
+                line += "  rec[" +
+                        std::string(rec.error   ? "error"
+                                    : rec.active ? "on"
+                                                 : "starting") +
+                        " f=" + std::to_string(rec.frames) + "]";
             for (int i = 0; i < engine.inputCount(); ++i) {
                 const auto s = engine.inputStatus(i);
                 line += "  in" + std::to_string(i) + "[" +

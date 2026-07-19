@@ -14,13 +14,15 @@ namespace moo::media {
 
 // hevc_nvenc via CUDA hwframes built on OUR primary context. Low-latency
 // tuned: p4 + tune ull, CBR with single-frame VBV, no B-frames, in-band
-// SPS/PPS (no GLOBAL_HEADER, so nvenc repeats headers on every IDR — what
-// MPEG-TS wants). PTS is the media tick index in show timebase (fpsD/fpsN).
+// SPS/PPS. MPEG-TS/SRT uses in-band headers; file recording requests
+// GLOBAL_HEADER for Matroska codec configuration. PTS is the media tick index
+// in show timebase (fpsD/fpsN).
 class FfmpegNvenc {
 public:
     ~FfmpegNvenc() { close(); }
 
-    bool open(CudaCtx& cuda, const VideoFormatDesc& show, int bitrateKbps);
+    bool open(CudaCtx& cuda, const VideoFormatDesc& show, int bitrateKbps,
+              bool globalHeader = false);
     void close();
     bool ok() const { return enc_ != nullptr; }
 

@@ -14,11 +14,13 @@ bool ShowFile::State::cfgEquals(const EngineConfig& a, const EngineConfig& b) {
     for (size_t i = 0; i < a.inputs.size(); ++i)
         if (a.inputs[i].type != b.inputs[i].type ||
             a.inputs[i].ref != b.inputs[i].ref ||
-            a.inputs[i].syncFrames != b.inputs[i].syncFrames)
+            a.inputs[i].syncFrames != b.inputs[i].syncFrames ||
+            a.inputs[i].mediaLoop != b.inputs[i].mediaLoop)
             return false;
     return a.show == b.show && a.ndiOut == b.ndiOut &&
            a.ndiOutName == b.ndiOutName && a.srtUrl == b.srtUrl &&
-           a.srtBitrateKbps == b.srtBitrateKbps && a.audio == b.audio &&
+           a.srtBitrateKbps == b.srtBitrateKbps &&
+           a.recordBitrateKbps == b.recordBitrateKbps && a.audio == b.audio &&
            a.masterAudioDelayMs == b.masterAudioDelayMs;
 }
 
@@ -57,6 +59,8 @@ bool ShowFile::load(State& st) const {
                         .toStdString();
     st.cfg.srtBitrateKbps =
         s.value("srtBitrateKbps", st.cfg.srtBitrateKbps).toInt();
+    st.cfg.recordBitrateKbps =
+        s.value("recordBitrateKbps", st.cfg.recordBitrateKbps).toInt();
     st.cfg.audio = s.value("audio", st.cfg.audio).toBool();
     st.cfg.masterAudioDelayMs =
         s.value("masterDelayMs", st.cfg.masterAudioDelayMs).toInt();
@@ -70,11 +74,14 @@ bool ShowFile::load(State& st) const {
         const QString type = s.value("type").toString();
         spec.type = type == QStringLiteral("srt")   ? InputSpec::Type::Srt
                     : type == QStringLiteral("omt") ? InputSpec::Type::Omt
+                    : type == QStringLiteral("media")
+                        ? InputSpec::Type::Media
                                                     : InputSpec::Type::Ndi;
         spec.ref = s.value("ref").toString().toStdString();
         // Absent in v1 show files -> stays off (-1).
         spec.syncFrames = s.value("framesync", spec.syncFrames).toInt();
         if (spec.syncFrames < -1 || spec.syncFrames > 4) spec.syncFrames = -1;
+        spec.mediaLoop = s.value("mediaLoop", spec.mediaLoop).toBool();
         st.cfg.inputs.push_back(std::move(spec));
     }
     s.endArray();
@@ -125,6 +132,7 @@ void ShowFile::save(const State& st) const {
     s.setValue("ndiOutName", QString::fromStdString(st.cfg.ndiOutName));
     s.setValue("srtOut", QString::fromStdString(st.cfg.srtUrl));
     s.setValue("srtBitrateKbps", st.cfg.srtBitrateKbps);
+    s.setValue("recordBitrateKbps", st.cfg.recordBitrateKbps);
     s.setValue("audio", st.cfg.audio);
     s.setValue("masterDelayMs", st.cfg.masterAudioDelayMs);
     s.endGroup();
@@ -133,11 +141,22 @@ void ShowFile::save(const State& st) const {
     for (int i = 0; i < int(st.cfg.inputs.size()); ++i) {
         s.setArrayIndex(i);
         const auto& spec = st.cfg.inputs[size_t(i)];
-        s.setValue("type", spec.type == InputSpec::Type::Srt   ? QStringLiteral("srt")
-                           : spec.type == InputSpec::Type::Omt ? QStringLiteral("omt")
-                                                               : QStringLiteral("ndi"));
+        s.setValue(
+            "type",
+            spec.type == InputSpec::Type::Srt     ? QStringLiteral("srt")
+            : spec.type == InputSpec::Type::Omt   ? QStringLiteral("omt")
+            : spec.type == InputSpec::Type::Media ? QStringLiteral("media")
+                                                  : QStringLiteral("ndi"));
         s.setValue("ref", QString::fromStdString(spec.ref));
         s.setValue("framesync", spec.syncFrames);
+        if (spec.type == InputSpec::Type::Media) {
+            s.setValue("mediaLoop", spec.mediaLoop);
+        } else {
+            s.remove("mediaLoop");
+        }
+        // A restored show cues media from its start and plays; pause is an
+        // ephemeral transport state, not a startup mode.
+        s.remove("mediaPlaying");
     }
     s.endArray();
 

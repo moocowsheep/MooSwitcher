@@ -1,5 +1,7 @@
 #include "ui/EngineBridge.h"
 
+#include <QFileInfo>
+
 #include "core/Stats.h"
 
 namespace moo::ui {
@@ -71,11 +73,16 @@ void EngineBridge::replaceInput(int input, QString ref, int syncFrames,
                                 int type) {
     const std::string r = ref.toStdString();
     const auto t =
-        type >= 0 && type <= 2 ? InputSpec::Type(type)
+        type >= 0 && type <= 3 ? InputSpec::Type(type)
         : r.rfind("srt://", 0) == 0   ? InputSpec::Type::Srt
         : r.rfind("omt://", 0) == 0   ? InputSpec::Type::Omt
+        : QFileInfo(ref).isFile()      ? InputSpec::Type::Media
                                       : InputSpec::Type::Ndi;
     engine_.requestInputReplace(input, {t, r, syncFrames});
+}
+
+void EngineBridge::startRecording(QString path) {
+    engine_.requestRecording(path.toStdString());
 }
 
 int EngineBridge::audioAutoTrimMs(int input) const {

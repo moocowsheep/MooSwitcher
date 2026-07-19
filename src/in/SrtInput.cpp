@@ -15,9 +15,11 @@ namespace moo {
 
 SrtInput::SrtInput(gpu::VkEngine& eng, gpu::Queue& uploadQueue,
                    media::CudaCtx& cuda, std::string url, int index,
-                   int syncFrames)
+                   int syncFrames, bool mediaMode, bool mediaPlaying,
+                   bool mediaLoop)
     : eng_(eng), queue_(uploadQueue), cuda_(cuda), url_(std::move(url)),
-      index_(index), syncFrames_(syncFrames) {
+      index_(index), mediaMode_(mediaMode), syncFrames_(syncFrames),
+      mediaPlaying_(mediaPlaying), mediaLoop_(mediaLoop) {
     static std::once_flag netInit;
     std::call_once(netInit, [] { avformat_network_init(); });
 
@@ -28,7 +30,8 @@ SrtInput::SrtInput(gpu::VkEngine& eng, gpu::Queue& uploadQueue,
         if (av_hwdevice_ctx_init(hwDev_) < 0) av_buffer_unref(&hwDev_);
     }
     if (!hwDev_) {
-        MOO_LOGE("in%d(srt): CUDA hwdevice init failed", index_);
+        MOO_LOGE("in%d(%s): CUDA hwdevice init failed", index_,
+                 mediaMode_ ? "media" : "srt");
         return;
     }
     thread_ = std::jthread([this](std::stop_token st) { run(st); });
@@ -52,6 +55,33 @@ SrtInput::Status SrtInput::status() const {
     return s;
 }
 
+IInputSource::MediaState SrtInput::mediaState() const {
+    if (!mediaMode_) return {};
+    return {true,
+            mediaPlaying_.load(std::memory_order_relaxed),
+            mediaLoop_.load(std::memory_order_relaxed),
+            mediaAtEnd_.load(std::memory_order_relaxed),
+            mediaPositionMs_.load(std::memory_order_relaxed),
+            mediaDurationMs_.load(std::memory_order_relaxed)};
+}
+
+void SrtInput::setMediaPlaying(bool playing) {
+    if (!mediaMode_) return;
+    if (playing && mediaAtEnd_.load(std::memory_order_relaxed))
+        mediaRestart_.store(true, std::memory_order_release);
+    mediaPlaying_.store(playing, std::memory_order_release);
+}
+
+void SrtInput::setMediaLoop(bool loop) {
+    if (mediaMode_) mediaLoop_.store(loop, std::memory_order_release);
+}
+
+void SrtInput::restartMedia() {
+    if (!mediaMode_) return;
+    mediaPlaying_.store(true, std::memory_order_release);
+    mediaRestart_.store(true, std::memory_order_release);
+}
+
 int SrtInput::interruptCb(void* opaque) {
     return static_cast<SrtInput*>(opaque)->stopFlag_.load(std::memory_order_relaxed);
 }
@@ -65,6 +95,12 @@ AVPixelFormat SrtInput::pickCuda(AVCodecContext*, const AVPixelFormat* fmts) {
 bool SrtInput::openStream() {
     ptsSynth_ = false;  // re-judge the new stream's timestamps
     synthK_ = 0;
+    mediaFirstPtsNs_ = INT64_MIN;
+    mediaStartMonoNs_ = 0;
+    mediaPauseMonoNs_ = 0;
+    mediaWasPlaying_ = false;
+    mediaAtEnd_.store(false, std::memory_order_relaxed);
+    mediaPositionMs_.store(0, std::memory_order_relaxed);
     ic_ = avformat_alloc_context();
     ic_->interrupt_callback = {&SrtInput::interruptCb, this};
     if (avformat_open_input(&ic_, url_.c_str(), nullptr, nullptr) < 0) return false;
@@ -92,15 +128,23 @@ bool SrtInput::openStream() {
                 avcodec_free_context(&adec_);
         }
         if (!adec_) {
-            MOO_LOGW("in%d(srt): audio stream present but not decodable",
-                     index_);
+            MOO_LOGW("in%d(%s): audio stream present but not decodable",
+                     index_, mediaMode_ ? "media" : "srt");
             audIdx_ = -1;
         }
     }
 
+    if (mediaMode_) {
+        const int64_t duration =
+            ic_->duration > 0 && ic_->duration != AV_NOPTS_VALUE
+                ? ic_->duration / (AV_TIME_BASE / 1000)
+                : 0;
+        mediaDurationMs_.store(duration, std::memory_order_relaxed);
+    }
     connected_.store(true, std::memory_order_relaxed);
-    MOO_LOGI("in%d(srt): connected, %s %dx%d%s", index_, codec->name,
-             par->width, par->height, adec_ ? " + audio" : "");
+    MOO_LOGI("in%d(%s): opened, %s %dx%d%s", index_,
+             mediaMode_ ? "media" : "srt", codec->name, par->width,
+             par->height, adec_ ? " + audio" : "");
     return true;
 }
 
@@ -131,7 +175,8 @@ void SrtInput::handleAudioFrame(AVFrame* f) {
                                 nullptr) < 0 ||
             swr_init(swr_) < 0) {
             if (swr_) swr_free(&swr_);
-            MOO_LOGW("in%d(srt): swr init failed for audio", index_);
+            MOO_LOGW("in%d(%s): swr init failed for audio", index_,
+                     mediaMode_ ? "media" : "srt");
             return;
         }
         av_channel_layout_copy(&swrInLayout_, &f->ch_layout);
@@ -171,7 +216,8 @@ void SrtInput::handleFrame(AVFrame* f) {
     d.width = f->width;
     d.height = f->height;
     d.pixfmt = PixFmt::NV12;
-    const AVRational fr = ic_->streams[vidIdx_]->avg_frame_rate;
+    const AVRational fr =
+        av_guess_frame_rate(ic_, ic_->streams[vidIdx_], f);
     if (fr.num > 0 && fr.den > 0) {
         d.fpsN = fr.num;
         d.fpsD = fr.den;
@@ -187,14 +233,16 @@ void SrtInput::handleFrame(AVFrame* f) {
         for (int s = 0; s < slots; ++s) {
             const int fd = ring_->exportStagingFd(s);
             if (fd < 0 || !cuda_.importVkFd(fd, ring_->stagingBytes(), imports_[s])) {
-                MOO_LOGE("in%d(srt): staging import failed", index_);
+                MOO_LOGE("in%d(%s): staging import failed", index_,
+                         mediaMode_ ? "media" : "srt");
                 ring_.reset();
                 return;
             }
         }
         std::lock_guard lk(descM_);
         desc_ = d;
-        MOO_LOGI("in%d(srt): format %dx%d @ %lld/%lld", index_, d.width, d.height,
+        MOO_LOGI("in%d(%s): format %dx%d @ %lld/%lld", index_,
+                 mediaMode_ ? "media" : "srt", d.width, d.height,
                  (long long)d.fpsN, (long long)d.fpsD);
     }
 
@@ -261,6 +309,32 @@ void SrtInput::handleFrame(AVFrame* f) {
     frameCtr.add();
 }
 
+bool SrtInput::paceTimestamp(int streamIndex, int64_t timestamp,
+                             std::stop_token stop) {
+    if (!mediaMode_ || timestamp == AV_NOPTS_VALUE) return true;
+    const int64_t ptsNs =
+        av_rescale_q(timestamp, ic_->streams[streamIndex]->time_base,
+                     AVRational{1, 1'000'000'000});
+    const int64_t now = MediaClock::nowNs();
+    if (mediaFirstPtsNs_ == INT64_MIN) {
+        mediaFirstPtsNs_ = ptsNs;
+        mediaStartMonoNs_ = now;
+    }
+    const int64_t relativeNs = std::max<int64_t>(0, ptsNs - mediaFirstPtsNs_);
+    const int64_t target = mediaStartMonoNs_ + relativeNs;
+    while (!stop.stop_requested() &&
+           !mediaRestart_.load(std::memory_order_acquire) &&
+           mediaPlaying_.load(std::memory_order_acquire)) {
+        const int64_t remaining = target - MediaClock::nowNs();
+        if (remaining <= 0) break;
+        std::this_thread::sleep_for(
+            std::chrono::nanoseconds(std::min<int64_t>(remaining, 5'000'000)));
+    }
+    return !stop.stop_requested() &&
+           !mediaRestart_.load(std::memory_order_acquire) &&
+           mediaPlaying_.load(std::memory_order_acquire);
+}
+
 void SrtInput::run(std::stop_token st) {
     auto& reconnCtr = Stats::counter("in" + std::to_string(index_) + ".reconnects");
     AVPacket* pkt = av_packet_alloc();
@@ -268,6 +342,30 @@ void SrtInput::run(std::stop_token st) {
     bool everConnected = false;
 
     while (!st.stop_requested()) {
+        if (mediaMode_) {
+            if (mediaRestart_.exchange(false, std::memory_order_acq_rel)) {
+                closeStream();
+                mediaAtEnd_.store(false, std::memory_order_relaxed);
+            }
+
+            const bool playing =
+                mediaPlaying_.load(std::memory_order_acquire);
+            if (!playing) {
+                if (mediaWasPlaying_) {
+                    mediaPauseMonoNs_ = MediaClock::nowNs();
+                    mediaWasPlaying_ = false;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            if (!mediaWasPlaying_) {
+                if (mediaPauseMonoNs_ && mediaStartMonoNs_)
+                    mediaStartMonoNs_ +=
+                        MediaClock::nowNs() - mediaPauseMonoNs_;
+                mediaWasPlaying_ = true;
+            }
+        }
+
         if (!ic_) {
             if (!openStream()) {
                 closeStream();
@@ -275,26 +373,57 @@ void SrtInput::run(std::stop_token st) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 continue;
             }
-            if (everConnected) reconnCtr.add();
+            if (everConnected && !mediaMode_) reconnCtr.add();
             everConnected = true;
         }
 
         const int r = av_read_frame(ic_, pkt);
         if (r < 0) {
-            MOO_LOGW("in%d(srt): read error/eof (%d); reconnecting", index_, r);
-            closeStream();
+            if (mediaMode_) {
+                mediaAtEnd_.store(true, std::memory_order_relaxed);
+                if (mediaLoop_.load(std::memory_order_acquire)) {
+                    closeStream();
+                } else {
+                    mediaPlaying_.store(false, std::memory_order_release);
+                }
+            } else {
+                MOO_LOGW("in%d(srt): read error/eof (%d); reconnecting",
+                         index_, r);
+                closeStream();
+            }
             continue;
         }
         if (pkt->stream_index == vidIdx_) {
             if (avcodec_send_packet(dec_, pkt) >= 0) {
                 while (avcodec_receive_frame(dec_, frame) >= 0) {
+                    if (!paceTimestamp(vidIdx_, frame->best_effort_timestamp,
+                                       st)) {
+                        av_frame_unref(frame);
+                        break;
+                    }
                     handleFrame(frame);
+                    if (mediaMode_ && mediaFirstPtsNs_ != INT64_MIN &&
+                        frame->best_effort_timestamp != AV_NOPTS_VALUE) {
+                        const int64_t ptsNs = av_rescale_q(
+                            frame->best_effort_timestamp,
+                            ic_->streams[vidIdx_]->time_base,
+                            AVRational{1, 1'000'000'000});
+                        mediaPositionMs_.store(
+                            std::max<int64_t>(0, ptsNs - mediaFirstPtsNs_) /
+                                1'000'000,
+                            std::memory_order_relaxed);
+                    }
                     av_frame_unref(frame);
                 }
             }
         } else if (adec_ && pkt->stream_index == audIdx_) {
             if (avcodec_send_packet(adec_, pkt) >= 0) {
                 while (avcodec_receive_frame(adec_, frame) >= 0) {
+                    if (!paceTimestamp(audIdx_, frame->best_effort_timestamp,
+                                       st)) {
+                        av_frame_unref(frame);
+                        break;
+                    }
                     handleAudioFrame(frame);
                     av_frame_unref(frame);
                 }

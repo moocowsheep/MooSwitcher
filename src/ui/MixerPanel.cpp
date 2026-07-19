@@ -3,6 +3,8 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -27,6 +29,8 @@ QString shortSourceName(QString ref) {
         ref = QStringLiteral("SRT · ") + ref.mid(6);
     else if (ref.startsWith(QStringLiteral("omt://"), Qt::CaseInsensitive))
         ref = QStringLiteral("OMT · ") + ref.mid(6);
+    else if (QFileInfo(ref).isAbsolute())
+        ref = QStringLiteral("MEDIA · ") + QFileInfo(ref).fileName();
     return ref.isEmpty() ? QStringLiteral("NO SOURCE") : ref;
 }
 
@@ -66,7 +70,22 @@ public:
         refreshBtn->setObjectName(QStringLiteral("actionButton"));
         connect(refreshBtn, &QPushButton::clicked, this, [this] { refresh(); });
         manualRow->addWidget(refreshBtn);
+        auto* mediaBtn = new QPushButton(QStringLiteral("OPEN MEDIA"));
+        mediaBtn->setObjectName(QStringLiteral("actionButton"));
+        connect(mediaBtn, &QPushButton::clicked, this, [this] {
+            const QString path = QFileDialog::getOpenFileName(
+                this, QStringLiteral("Open media clip"), {},
+                QStringLiteral(
+                    "Video files (*.mkv *.mp4 *.mov *.m4v *.ts);;All files (*)"));
+            if (path.isEmpty()) return;
+            mediaChosen_ = true;
+            manual_->setText(path);
+            sync_->setCurrentIndex(0);
+        });
+        manualRow->addWidget(mediaBtn);
         col->addLayout(manualRow);
+        connect(manual_, &QLineEdit::textEdited, this,
+                [this] { mediaChosen_ = false; });
 
         auto* syncRow = new QHBoxLayout;
         auto* syncLabel = new QLabel(QStringLiteral("FRAME SYNC"));
@@ -102,6 +121,7 @@ public:
 
     // -1 = infer from the ref (manual entry); explicit for discovery rows.
     int chosenType() const {
+        if (mediaChosen_) return 3;
         if (!manual_->text().trimmed().isEmpty()) return -1;
         if (auto* item = list_->currentItem())
             return item->data(kTypeRole).toInt();
@@ -137,6 +157,7 @@ private:
     QListWidget* list_ = nullptr;
     QLineEdit* manual_ = nullptr;
     QComboBox* sync_ = nullptr;
+    bool mediaChosen_ = false;
 };
 
 float dbFor(float linear) {

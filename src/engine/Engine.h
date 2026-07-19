@@ -25,15 +25,18 @@
 namespace moo {
 
 class NdiOutput;
+class FileRecorder;
 class SrtOutput;
 
 struct InputSpec {
-    enum class Type { Ndi, Srt, Omt } type = Type::Ndi;
-    std::string ref;  // NDI name substring, srt:// URL, or OMT name/omt:// URL
+    enum class Type { Ndi, Srt, Omt, Media } type = Type::Ndi;
+    std::string ref;  // NDI name, SRT/OMT URL, or local media path
     // Frame sync (docs/design-framesync.md): -1 = off (v1 latest-frame
     // behavior), 0 = measure-only (auto A/V trim, no added latency),
     // 1..4 = buffered re-timing by that many source frames.
     int syncFrames = -1;
+    bool mediaPlaying = true;
+    bool mediaLoop = true;
 };
 
 struct EngineConfig {
@@ -46,6 +49,7 @@ struct EngineConfig {
     std::string ndiOutName = "MooSwitcher PGM";
     std::string srtUrl;      // empty = SRT output off
     int srtBitrateKbps = 0;  // 0 = auto
+    int recordBitrateKbps = 0;  // 0 = auto; independent of SRT output
     bool audio = true;
     // A/V calibration. Measured on this box: with 0, offsets land at
     // 1080p NDI ~-1ms / SRT ~-7ms, 8K NDI ~+7ms (audio ages ~one capture
@@ -68,8 +72,9 @@ public:
 
     // Source picker: swap input `index` to a new source. The render thread
     // performs the swap between ticks (placeholder until the new source
-    // delivers); the old input is destroyed on a detached thread. SRT specs
-    // require Vulkan/CUDA interop (initialized on demand; refused if absent).
+    // delivers); the old input is destroyed on a detached thread. SRT and
+    // media specs require Vulkan/CUDA interop (initialized on demand; refused
+    // if absent).
     void requestInputReplace(int index, InputSpec spec);
     std::vector<NdiFinder::Source> ndiSources() const;
     // OMT discovery snapshot (names in "HOST (Name)" form). Empty when built
@@ -78,6 +83,19 @@ public:
     std::string inputRef(int i) const;  // current source ref (UI labels)
     InputSpec::Type inputType(int i) const;
     int inputSyncFrames(int i) const;   // current frame-sync setting (-1 off)
+    IInputSource::MediaState inputMediaState(int i) const;
+
+    struct RecordingState {
+        bool active = false;
+        bool pending = false;
+        bool error = false;
+        int64_t frames = 0;
+        std::string path;
+    };
+    // Empty path stops recording. Encoder construction and finalization run
+    // on the requesting thread; render/audio consumers switch atomically.
+    void requestRecording(std::string path);
+    RecordingState recordingState() const;
 
     bool copyMultiview(std::vector<uint8_t>& out, uint64_t& lastSeq, int& w, int& h);
 
@@ -125,8 +143,12 @@ private:
     std::unique_ptr<NdiOutput> ndiOut_;
     media::CudaCtx cuda_;
     std::unique_ptr<SrtOutput> srtOut_;
+    // Atomic shared ownership lets the audio and render threads take a
+    // non-blocking snapshot while start/stop swaps the active recorder.
+    std::atomic<std::shared_ptr<FileRecorder>> recorder_;
     std::unique_ptr<audio::AudioEngine> audio_;
-    std::array<uint64_t, gpu::Compositor::kFramesInFlight> nvPushed_{};
+    std::array<uint64_t, gpu::Compositor::kFramesInFlight> srtNvPushed_{};
+    std::array<uint64_t, gpu::Compositor::kFramesInFlight> recordNvPushed_{};
 
     std::shared_ptr<gpu::UploadRing> placeholderRing_;
     std::shared_ptr<const gpu::GpuFrame> placeholder_;
@@ -157,8 +179,14 @@ private:
     mutable std::mutex replaceM_;  // pending replaces + current input specs
     std::vector<std::pair<int, InputSpec>> pendingReplace_;
 
+    mutable std::mutex recordM_;
+    std::string requestedRecordingPath_;
+    std::atomic<bool> recordingPending_{false};
+    std::atomic<bool> recordingError_{false};
+    std::atomic<uint64_t> recorderGeneration_{0};
+
     std::jthread renderThread_;
-    bool started_ = false;
+    std::atomic<bool> started_{false};
 };
 
 }  // namespace moo

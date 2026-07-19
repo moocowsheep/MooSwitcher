@@ -33,6 +33,8 @@ private:
     void pushTransition();
     void refreshBusReadouts();
     void refreshOutputFormatState();
+    void refreshMediaControls();
+    void refreshRecordingState();
     ShowFile::State collectState() const;
 
     EngineBridge& bridge_;
@@ -47,6 +49,8 @@ private:
     QLabel* healthBadge_ = nullptr;
     QLabel* programReadout_ = nullptr;
     QLabel* previewReadout_ = nullptr;
+    QPushButton* recordBtn_ = nullptr;
+    QLabel* recordState_ = nullptr;
     QComboBox* outputResolution_ = nullptr;
     QComboBox* outputFrameRate_ = nullptr;
     QLabel* outputFormatState_ = nullptr;
@@ -60,6 +64,14 @@ private:
     QPushButton* dskBtns_[kDskCount] = {nullptr, nullptr};
     QComboBox* dskSrc_[kDskCount] = {nullptr, nullptr};
     QSpinBox* dskFade_[kDskCount] = {nullptr, nullptr};
+    struct MediaRow {
+        QLabel* name = nullptr;
+        QLabel* time = nullptr;
+        QPushButton* play = nullptr;
+        QPushButton* restart = nullptr;
+        QPushButton* loop = nullptr;
+    };
+    std::vector<MediaRow> mediaRows_;
     QStringList inputNames_;
     VideoFormatDesc activeOutput_;
     int lastProgram_ = -1, lastPreview_ = -1;
