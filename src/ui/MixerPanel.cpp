@@ -418,7 +418,7 @@ void MeterWidget::setLevels(float left, float right) {
 void MeterWidget::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.fillRect(rect(), QColor(7, 10, 13));
+    painter.fillRect(rect(), QColor(8, 9, 11));
 
     constexpr int kSegments = 20;
     constexpr int kGap = 2;
@@ -434,11 +434,11 @@ void MeterWidget::paintEvent(QPaintEvent*) {
                           int(std::round(float(segment + 1) * segmentHeight));
             QRect segmentRect(x, y + 1, barWidth,
                               std::max(1, int(segmentHeight) - 1));
-            QColor color(24, 31, 38);
+            QColor color(27, 30, 34);
             if (displayedDb >= lowDb) {
-                color = lowDb >= -6.f    ? QColor(230, 64, 72)
-                        : lowDb >= -18.f ? QColor(222, 176, 49)
-                                         : QColor(47, 184, 105);
+                color = lowDb >= -6.f    ? QColor(240, 54, 62)
+                        : lowDb >= -18.f ? QColor(240, 183, 60)
+                                         : QColor(47, 197, 110);
             }
             painter.fillRect(segmentRect, color);
         }
@@ -452,7 +452,7 @@ void MeterWidget::paintEvent(QPaintEvent*) {
 
     drawChannel(2, dispL_, holdL_);
     drawChannel(2 + barWidth + kGap, dispR_, holdR_);
-    painter.setPen(QPen(QColor(54, 64, 74), 1));
+    painter.setPen(QPen(QColor(56, 61, 67), 1));
     painter.drawRect(rect().adjusted(0, 0, -1, -1));
 }
 
