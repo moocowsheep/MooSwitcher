@@ -163,7 +163,7 @@ void EngineBridge::poll() {
 
     QStringList problems;
     for (int i = 0; i < engine_.inputCount(); ++i)
-        if (!engine_.inputStatus(i).connected)
+        if (!engine_.inputStatus(i).connected && !engine_.inputRef(i).empty())
             problems << QStringLiteral("IN%1 no signal").arg(i + 1);
     if (engine_.srtConfigured() && !engine_.srtConnected())
         problems << QStringLiteral("SRT out down (reconnecting)");
@@ -196,6 +196,7 @@ void EngineBridge::poll() {
                       .arg(a->mixSkips())
                       .arg(a->underruns());
     for (int i = 0; i < engine_.inputCount(); ++i) {
+        if (engine_.inputRef(i).empty()) continue;  // unassigned = quiet
         const auto s = engine_.inputStatus(i);
         status += QStringLiteral("   in%1: %2 %3x%4 f=%5 d=%6 r=%7")
                       .arg(i)

@@ -49,8 +49,9 @@ struct InputSpec {
 
 struct EngineConfig {
     VideoFormatDesc show{1920, 1080, 60000, 1001};
-    int mvW = 1280;
-    int mvH = 720;
+    // 1080p keeps 21 input thumbnails (7 x 3 grid) legible on the monitor.
+    int mvW = 1920;
+    int mvH = 1080;
     std::vector<InputSpec> inputs;
     bool validation = false;
     bool ndiOut = true;

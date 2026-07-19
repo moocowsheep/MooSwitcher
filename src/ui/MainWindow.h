@@ -57,6 +57,7 @@ private:
     QComboBox* outputFrameRate_ = nullptr;
     QLabel* outputFormatState_ = nullptr;
     std::vector<QPushButton*> pgmBtns_, pvwBtns_;
+    std::vector<QComboBox*> inputPickers_;
     QPushButton* cutBtn_ = nullptr;
     QPushButton* autoBtn_ = nullptr;
     QPushButton* ftbBtn_ = nullptr;

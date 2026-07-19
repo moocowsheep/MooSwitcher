@@ -36,7 +36,7 @@ QString shortSourceName(QString ref) {
                    ? QStringLiteral("STILL · ")
                    : QStringLiteral("MEDIA · ")) +
               QFileInfo(ref).fileName();
-    return ref.isEmpty() ? QStringLiteral("NO SOURCE") : ref;
+    return ref.isEmpty() ? QStringLiteral("BLACK") : ref;
 }
 
 // Pick an NDI/OMT source from discovery or type an NDI name substring /

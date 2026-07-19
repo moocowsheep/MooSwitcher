@@ -72,7 +72,10 @@ void MultiviewWidget::paintEvent(QPaintEvent*) {
     const int split = frame_.width() / 2;
     constexpr int kColumnGap = 0;
     const int inputWidth = split - kColumnGap / 2;
-    const int inputColumns = std::clamp(inputCount_, 1, 6);
+    // Mirrors the compositor's grid: one row up to 6 inputs, at most three
+    // rows beyond (21 inputs = 7 x 3).
+    const int inputColumns =
+        inputCount_ <= 6 ? std::max(inputCount_, 1) : (inputCount_ + 2) / 3;
     const int inputRows = std::max(1, (inputCount_ + inputColumns - 1) /
                                           inputColumns);
     const int inputCellWidth = (inputWidth / inputColumns) & ~1;

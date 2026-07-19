@@ -218,6 +218,7 @@ if(MOO_BUILD_TESTS)
   if(TARGET mooswitcher)
     add_executable(moo_ui_tests
       tests/ui_output_format_test.cpp
+      tests/ui_input_picker_test.cpp
       src/ui/MainWindow.cpp
       src/ui/MainWindow.h
       src/ui/MultiviewWidget.cpp

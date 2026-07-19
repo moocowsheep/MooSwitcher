@@ -85,9 +85,11 @@ int main(int argc, char** argv) {
                  i + 1 < args.size())
             shotTab = args[++i].toInt();
     }
-    if (cfg.inputs.empty())
-        cfg.inputs = {{moo::InputSpec::Type::Ndi, "MooBenchA"},
-                      {moo::InputSpec::Type::Ndi, "MooBenchB"}};
+    // A fixed 21-input frame (7 x 3 on the multiview). Unassigned slots are
+    // black until the operator patches a source from the INPUTS tab.
+    constexpr size_t kInputSlots = 21;
+    while (cfg.inputs.size() < kInputSlots)
+        cfg.inputs.push_back({moo::InputSpec::Type::Ndi, ""});
     show.chans.resize(cfg.inputs.size());
 
     moo::Engine engine;

@@ -5,16 +5,21 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QInputDialog>
 #include <QKeySequence>
 #include <QScrollArea>
 #include <QShortcut>
+#include <QSignalBlocker>
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
+
+#include <functional>
 
 #include "media/StillImage.h"
 #include "ui/MixerPanel.h"
@@ -224,9 +229,9 @@ QPushButton#sourceButton {
     color: #dde1e5;
     font-size: 11px;
     font-weight: 750;
-    min-width: 88px;
+    min-width: 24px;
     min-height: 47px;
-    padding: 3px 7px;
+    padding: 3px 2px;
 }
 QPushButton#sourceButton:hover {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -561,6 +566,26 @@ QDialogButtonBox QPushButton:hover {
 }
 )QSS";
 
+// Input picker rows carry an action in Qt::UserRole and a source ref in
+// Qt::UserRole + 1. Non-negative actions are InputSpec::Type values passed
+// straight to EngineBridge::replaceInput.
+enum PickerAction {
+    kPickKeep = -100,   // current assignment; selecting it is a no-op
+    kPickBlack = -101,  // unassign: empty NDI ref renders black
+    kPickSrt = -102,    // prompt for an srt:// URL
+};
+
+// A combo whose list is rebuilt from live NDI/OMT discovery right before it
+// opens, so freshly announced sources appear without a refresh button.
+class SourceCombo : public QComboBox {
+public:
+    std::function<void()> rebuild;
+    void showPopup() override {
+        if (rebuild) rebuild();
+        QComboBox::showPopup();
+    }
+};
+
 QString displayName(QString ref) {
     ref = ref.trimmed();
     if (ref.startsWith(QStringLiteral("srt://"), Qt::CaseInsensitive))
@@ -572,7 +597,7 @@ QString displayName(QString ref) {
                    ? QStringLiteral("STILL · ")
                    : QStringLiteral("MEDIA · ")) +
               QFileInfo(ref).fileName();
-    if (ref.isEmpty()) return QStringLiteral("NO SOURCE");
+    if (ref.isEmpty()) return QStringLiteral("BLACK");
     return ref;
 }
 
@@ -983,12 +1008,12 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
                           const char* bus, std::vector<QPushButton*>& store,
                           auto slot) {
         auto* row = new QHBoxLayout;
-        row->setSpacing(7);
+        row->setSpacing(inputNames.size() > 12 ? 3 : 5);
         auto* tag = new QLabel(QStringLiteral("%1\n%2").arg(title, sub));
         tag->setObjectName(QStringLiteral("busTag"));
         tag->setProperty("bus", bus);
         tag->setAlignment(Qt::AlignCenter);
-        tag->setFixedSize(92, 55);
+        tag->setFixedSize(78, 55);
         row->addWidget(tag);
         for (int i = 0; i < inputNames.size(); ++i) {
             auto* button = new QPushButton;
@@ -1016,6 +1041,152 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     busScroll->setWidget(busCanvas);
     busesCol->addWidget(busScroll, 1);
     sourceTabs->addTab(buses, QStringLiteral("SWITCHER"));
+
+    // -- Input patch grid: mirrors the multiview's 4-wide matrix ------------
+    auto* inputsPanel = new QWidget;
+    auto* inputsRoot = new QVBoxLayout(inputsPanel);
+    inputsRoot->setContentsMargins(11, 9, 11, 10);
+    inputsRoot->setSpacing(8);
+    auto* inputsHeader = new QHBoxLayout;
+    inputsHeader->addWidget(makeSectionTitle(
+        QStringLiteral("INPUT SOURCES"),
+        QStringLiteral("PATCH NDI / OMT / SRT · UNASSIGNED INPUTS ARE BLACK")));
+    inputsHeader->addStretch(1);
+    auto* inputsHint = new QLabel(QStringLiteral(
+        "MEDIA, STILLS & FRAME SYNC: AUDIO MIXER → SOURCE NAME"));
+    inputsHint->setObjectName(QStringLiteral("sectionHint"));
+    inputsHeader->addWidget(inputsHint);
+    inputsRoot->addLayout(inputsHeader);
+
+    auto* pickerCanvas = new QWidget;
+    auto* pickerGrid = new QGridLayout(pickerCanvas);
+    pickerGrid->setContentsMargins(0, 0, 0, 0);
+    pickerGrid->setSpacing(6);
+    constexpr int kPickerColumns = 7;  // mirrors the multiview grid
+    for (int i = 0; i < bridge_.inputCount(); ++i) {
+        auto* cell = new QFrame;
+        cell->setObjectName(QStringLiteral("keyerCard"));
+        auto* cellCol = new QVBoxLayout(cell);
+        cellCol->setContentsMargins(7, 6, 7, 7);
+        cellCol->setSpacing(4);
+        auto* title = new QLabel(
+            QStringLiteral("INPUT %1").arg(i + 1, 2, 10, QLatin1Char('0')));
+        title->setObjectName(QStringLiteral("keyerTitle"));
+        cellCol->addWidget(title);
+
+        auto* combo = new SourceCombo;
+        combo->setObjectName(QStringLiteral("inputPicker"));
+        combo->setMinimumWidth(80);
+        combo->setToolTip(
+            QStringLiteral("Assign a source to input %1").arg(i + 1));
+        combo->rebuild = [this, i, combo] {
+            const QString current = bridge_.inputRef(i);
+            const QSignalBlocker block(combo);
+            combo->clear();
+            const auto add = [combo](const QString& label, int action,
+                                     const QString& ref) {
+                combo->addItem(label, action);
+                combo->setItemData(combo->count() - 1, ref, Qt::UserRole + 1);
+            };
+            add(QStringLiteral("BLACK"), kPickBlack, {});
+            for (const QString& name : bridge_.ndiSourceNames())
+                add(QStringLiteral("NDI · ") + name,
+                    int(InputSpec::Type::Ndi), name);
+            for (const QString& name : bridge_.omtSourceNames())
+                add(QStringLiteral("OMT · ") + name,
+                    int(InputSpec::Type::Omt), name);
+            add(QStringLiteral("SRT URL…"), kPickSrt, {});
+            int row = 0;  // BLACK
+            if (!current.isEmpty()) {
+                row = -1;
+                for (int r = 1; r < combo->count() && row < 0; ++r)
+                    if (combo->itemData(r, Qt::UserRole + 1).toString() ==
+                        current)
+                        row = r;
+                if (row < 0) {
+                    // Current source is not in discovery (SRT, media, still,
+                    // or an offline NDI name) -- keep it visible and selected.
+                    combo->insertItem(1, displayName(current), kPickKeep);
+                    combo->setItemData(1, current, Qt::UserRole + 1);
+                    row = 1;
+                }
+            }
+            combo->setCurrentIndex(row);
+        };
+        // Show the current assignment while closed; the full discovery list
+        // only exists inside an open popup.
+        const auto collapse = [this, i, combo] {
+            const QString ref = bridge_.inputRef(i);
+            const QSignalBlocker block(combo);
+            combo->clear();
+            combo->addItem(displayName(ref), kPickKeep);
+            combo->setItemData(0, ref, Qt::UserRole + 1);
+            combo->setCurrentIndex(0);
+        };
+        connect(combo, &QComboBox::activated, this,
+                [this, i, combo, collapse](int row) {
+            const int action = combo->itemData(row).toInt();
+            const QString ref =
+                combo->itemData(row, Qt::UserRole + 1).toString();
+            const QString current = bridge_.inputRef(i);
+            if (action == kPickKeep) {
+                collapse();
+                return;
+            }
+            if (action == kPickBlack) {
+                if (current.isEmpty())
+                    collapse();
+                else
+                    bridge_.replaceInput(i, {}, -1,
+                                         int(InputSpec::Type::Ndi));
+                return;
+            }
+            if (action == kPickSrt) {
+                bool accepted = false;
+                QString url =
+                    QInputDialog::getText(
+                        this,
+                        QStringLiteral("SRT source · input %1").arg(i + 1),
+                        QStringLiteral("srt:// URL"), QLineEdit::Normal,
+                        current.startsWith(QStringLiteral("srt://"))
+                            ? current
+                            : QStringLiteral(
+                                  "srt://host:9710?mode=caller&latency=120000"),
+                        &accepted)
+                        .trimmed();
+                if (!accepted || url.isEmpty()) {
+                    collapse();
+                    return;
+                }
+                if (!url.startsWith(QStringLiteral("srt://"),
+                                    Qt::CaseInsensitive))
+                    url.prepend(QStringLiteral("srt://"));
+                if (url == current)
+                    collapse();
+                else
+                    bridge_.replaceInput(i, url, bridge_.inputSyncFrames(i),
+                                         int(InputSpec::Type::Srt));
+                return;
+            }
+            if (ref == current)
+                collapse();
+            else
+                bridge_.replaceInput(i, ref, bridge_.inputSyncFrames(i),
+                                     action);
+            // On replace the poll notices the new ref and collapses the combo
+            // via onInputNames.
+        });
+        inputPickers_.push_back(combo);
+        cellCol->addWidget(combo);
+        pickerGrid->addWidget(cell, i / kPickerColumns, i % kPickerColumns);
+    }
+    for (int c = 0; c < kPickerColumns; ++c) pickerGrid->setColumnStretch(c, 1);
+
+    auto* pickerScroll = new QScrollArea;
+    pickerScroll->setWidgetResizable(true);
+    pickerScroll->setWidget(pickerCanvas);
+    inputsRoot->addWidget(pickerScroll, 1);
+    sourceTabs->addTab(inputsPanel, QStringLiteral("INPUTS"));
 
     if (bridge_.audioAvailable()) {
         auto* mixer = new MixerPanel(bridge_, inputNames);
@@ -1086,7 +1257,10 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
         mediaRoot->addWidget(card);
     }
     mediaRoot->addStretch(1);
-    sourceTabs->addTab(mediaPanel, QStringLiteral("MEDIA"));
+    auto* mediaScroll = new QScrollArea;
+    mediaScroll->setWidgetResizable(true);
+    mediaScroll->setWidget(mediaPanel);
+    sourceTabs->addTab(mediaScroll, QStringLiteral("MEDIA"));
 
     switcherRow->addWidget(sourceTabs, 1);
 
@@ -1296,7 +1470,7 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     setCentralWidget(central);
     onInputNames(inputNames);
     refreshBusReadouts();
-    resize(1440, 900);
+    resize(1600, 920);
 }
 
 ShowFile::State MainWindow::collectState() const {
@@ -1488,12 +1662,28 @@ void MainWindow::onInputNames(const QStringList& refs) {
     for (const QString& ref : refs) inputNames_ << displayName(ref);
     multiview_->setInputNames(inputNames_);
 
+    for (int i = 0; i < int(inputPickers_.size()) && i < refs.size(); ++i) {
+        auto* combo = inputPickers_[size_t(i)];
+        const QSignalBlocker block(combo);
+        combo->clear();
+        combo->addItem(displayName(refs[i]), kPickKeep);
+        combo->setItemData(0, refs[i], Qt::UserRole + 1);
+        combo->setCurrentIndex(0);
+    }
+
+    // Wide bus rows leave fewer pixels per key than the classic 2-6 input
+    // show. Shorten the mnemonics, then drop to hardware-style numbered
+    // crosspoints, instead of ever scrolling PROGRAM.
+    const int nameChars =
+        inputNames_.size() > 12 ? 0 : inputNames_.size() > 8 ? 7 : 14;
     for (int i = 0; i < inputNames_.size(); ++i) {
         const QString name = inputNames_[i];
         const QString text =
-            QStringLiteral("%1\n%2")
-                .arg(i + 1, 2, 10, QLatin1Char('0'))
-                .arg(name.left(14).toUpper());
+            nameChars == 0
+                ? QString::number(i + 1)
+                : QStringLiteral("%1\n%2")
+                      .arg(i + 1, 2, 10, QLatin1Char('0'))
+                      .arg(name.left(nameChars).toUpper());
         if (i < int(pgmBtns_.size())) {
             pgmBtns_[size_t(i)]->setText(text);
             pgmBtns_[size_t(i)]->setToolTip(

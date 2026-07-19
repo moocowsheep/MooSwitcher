@@ -87,6 +87,12 @@ void NdiReceiver::run(std::stop_token st) {
 
     while (!st.stop_requested()) {
         if (!connected_.load(std::memory_order_relaxed)) {
+            // An unassigned input (empty ref) is a deliberate black source;
+            // an empty substring would otherwise match the first discovery.
+            if (match_.empty()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
+            }
             auto src = finder_.lookup(match_);
             if (!src) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));

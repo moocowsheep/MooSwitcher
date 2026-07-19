@@ -619,7 +619,13 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
     const int outputW = mvW_ - outputX;
     const int outputH = ((mvH_ - kOutputGap) / 2) & ~1;
     const int previewY = outputH + kOutputGap;
-    const int inputCols = std::clamp(numInputs_, 1, 6);
+    // Up to 6 inputs sit in one row; beyond that the matrix folds to at most
+    // three TriCaster-style rows (21 inputs = 7 x 3). The wide aspect lets
+    // the scaled bank reach toward the output monitors instead of leaving a
+    // dead center. MultiviewWidget mirrors this formula for its hit rects --
+    // keep them in sync.
+    const int inputCols =
+        numInputs_ <= 6 ? std::max(numInputs_, 1) : (numInputs_ + 2) / 3;
     const int inputRows = std::max(1, (numInputs_ + inputCols - 1) / inputCols);
     const int inputCellW = (inputW / inputCols) & ~1;
     const int inputVideoH = std::max(2, (inputCellW * 9 / 16) & ~1);
