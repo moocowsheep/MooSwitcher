@@ -81,6 +81,26 @@ void EngineBridge::replaceInput(int input, QString ref, int syncFrames,
     engine_.requestInputReplace(input, {t, r, syncFrames});
 }
 
+void EngineBridge::replaceMediaPlaylist(
+    int input, std::vector<media::PlaylistItem> items, int syncFrames) {
+    InputSpec spec;
+    spec.type = InputSpec::Type::Media;
+    spec.syncFrames = syncFrames;
+    if (const auto current = engine_.inputMediaState(input);
+        current.available) {
+        spec.mediaPlaying = current.playing;
+        spec.mediaLoop = current.loop;
+    }
+    for (auto& item : items) {
+        if (item.path.empty()) continue;
+        media::normalizePlaylistItem(item);
+        spec.mediaPlaylist.push_back(std::move(item));
+    }
+    if (spec.mediaPlaylist.empty()) return;
+    spec.ref = spec.mediaPlaylist.front().path;
+    engine_.requestInputReplace(input, std::move(spec));
+}
+
 void EngineBridge::startRecording(QString path) {
     engine_.requestRecording(path.toStdString());
 }

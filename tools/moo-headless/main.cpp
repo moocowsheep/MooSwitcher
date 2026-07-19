@@ -3,6 +3,7 @@
 // exercises cut via a scripted schedule, prints stats.
 
 #include <csignal>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -30,6 +31,7 @@ int main(int argc, char** argv) {
     std::string recordPath;
     double recordStopAfter = -1;
     bool recordStopped = false;
+    int lastMediaInput = -1;  // --media-item appends to this playlist
     std::vector<std::pair<int, int>> inputDelays;  // {input, ms} audio trims
     struct Replace {
         double afterS;
@@ -52,17 +54,75 @@ int main(int argc, char** argv) {
         const std::string a = argv[i];
         auto next = [&]() -> const char* { return i + 1 < argc ? argv[++i] : nullptr; };
         if (a == "--input") {
-            if (const char* v = next())
+            if (const char* v = next()) {
                 cfg.inputs.push_back({moo::InputSpec::Type::Ndi, v});
+                lastMediaInput = -1;
+            }
         } else if (a == "--srt-input") {
-            if (const char* v = next())
+            if (const char* v = next()) {
                 cfg.inputs.push_back({moo::InputSpec::Type::Srt, v});
+                lastMediaInput = -1;
+            }
         } else if (a == "--omt-input") {
-            if (const char* v = next())
+            if (const char* v = next()) {
                 cfg.inputs.push_back({moo::InputSpec::Type::Omt, v});
+                lastMediaInput = -1;
+            }
         } else if (a == "--media-input") {
-            if (const char* v = next())
-                cfg.inputs.push_back({moo::InputSpec::Type::Media, v});
+            if (const char* v = next()) {
+                moo::InputSpec spec{moo::InputSpec::Type::Media, v};
+                spec.mediaPlaylist.emplace_back(v);
+                cfg.inputs.push_back(std::move(spec));
+                lastMediaInput = int(cfg.inputs.size()) - 1;
+            }
+        } else if (a == "--media-item") {
+            const char* v = next();
+            if (!v || lastMediaInput < 0) {
+                fprintf(stderr,
+                        "--media-item must follow the --media-input whose "
+                        "playlist it extends\n");
+                return 2;
+            }
+            cfg.inputs[size_t(lastMediaInput)].mediaPlaylist.emplace_back(v);
+        } else if (a == "--media-trim") {
+            const char* v = next();
+            long long inMs = 0;
+            long long outMs = 0;
+            const int fields =
+                v ? sscanf(v, "%lld:%lld", &inMs, &outMs) : 0;
+            if (lastMediaInput < 0 || fields < 1 || inMs < 0 ||
+                outMs < 0 || (outMs > 0 && outMs <= inMs)) {
+                fprintf(stderr,
+                        "--media-trim IN_MS[:OUT_MS] must follow the media "
+                        "item it configures; OUT must be after IN\n");
+                return 2;
+            }
+            auto& item =
+                cfg.inputs[size_t(lastMediaInput)].mediaPlaylist.back();
+            item.inMs = inMs;
+            item.outMs = fields == 2 ? outMs : 0;
+        } else if (a == "--media-speed") {
+            const char* v = next();
+            char* end = nullptr;
+            const double speed = v ? std::strtod(v, &end) : 0.0;
+            if (lastMediaInput < 0 || !v || end == v || *end ||
+                speed < 0.25 || speed > 4.0) {
+                fprintf(stderr,
+                        "--media-speed RATE must follow the media item it "
+                        "configures; RATE is 0.25 through 4.0\n");
+                return 2;
+            }
+            cfg.inputs[size_t(lastMediaInput)]
+                .mediaPlaylist.back()
+                .speedPermille = int(std::lround(speed * 1000.0));
+        } else if (a == "--media-no-loop") {
+            if (lastMediaInput < 0) {
+                fprintf(stderr,
+                        "--media-no-loop must follow the --media-input it "
+                        "configures\n");
+                return 2;
+            }
+            cfg.inputs[size_t(lastMediaInput)].mediaLoop = false;
         } else if (a == "--show") {
             const char* v = next();
             if (!v || sscanf(v, "%dx%d", &cfg.show.width, &cfg.show.height) != 2)
@@ -144,7 +204,11 @@ int main(int argc, char** argv) {
             fprintf(stderr,
                     "usage: moo-headless --input NAME [--input NAME ...] "
                     "[--srt-input URL] [--omt-input NAME_OR_URL] "
-                    "[--media-input PATH] [--record PATH.mkv] "
+                    "[--media-input PATH [--media-trim IN_MS[:OUT_MS]] "
+                    "[--media-speed RATE] [--media-item PATH "
+                    "[--media-trim IN_MS[:OUT_MS]] [--media-speed RATE] ...] "
+                    "[--media-no-loop]] "
+                    "[--record PATH.mkv] "
                     "[--record-bitrate KBPS] [--record-stop-after S] "
                     "[--show WxH] [--duration S] [--dump-dir D] "
                     "[--dump-every S] [--cuts] [--no-audio] "
@@ -268,7 +332,12 @@ int main(int argc, char** argv) {
                         std::to_string(s.desc.width) + "x" +
                         std::to_string(s.desc.height) +
                         " f=" + std::to_string(s.frames) +
-                        " d=" + std::to_string(s.drops) + "]";
+                        " d=" + std::to_string(s.drops);
+                if (auto* aud = engine.audio())
+                    line += " a=" + std::to_string(
+                                       aud->channel(i).pushedFrames.load(
+                                           std::memory_order_relaxed));
+                line += "]";
             }
             MOO_LOGI("%s", line.c_str());
             nextLogNs += 1'000'000'000;

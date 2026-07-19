@@ -20,6 +20,18 @@
 
 namespace moo {
 
+namespace {
+void normalizeMediaSpec(InputSpec& spec) {
+    if (spec.type != InputSpec::Type::Media) return;
+    if (spec.mediaPlaylist.empty() && !spec.ref.empty())
+        spec.mediaPlaylist.emplace_back(spec.ref);
+    for (auto& item : spec.mediaPlaylist)
+        media::normalizePlaylistItem(item);
+    if (!spec.mediaPlaylist.empty())
+        spec.ref = spec.mediaPlaylist.front().path;
+}
+}  // namespace
+
 Engine::Engine() = default;
 Engine::~Engine() { stop(); }
 
@@ -30,6 +42,7 @@ int64_t Engine::srtFramesEncoded() const {
 bool Engine::srtConnected() const { return srtOut_ && srtOut_->connected(); }
 
 void Engine::requestInputReplace(int index, InputSpec spec) {
+    normalizeMediaSpec(spec);
     std::lock_guard lk(replaceM_);
     pendingReplace_.emplace_back(index, std::move(spec));
 }
@@ -70,6 +83,14 @@ int Engine::inputSyncFrames(int i) const {
 IInputSource::MediaState Engine::inputMediaState(int i) const {
     if (i < 0 || i >= int(inputs_.size())) return {};
     return inputs_[size_t(i)]->mediaState();
+}
+
+std::vector<media::PlaylistItem> Engine::inputMediaPlaylist(int i) const {
+    std::lock_guard lk(replaceM_);
+    if (i < 0 || i >= int(cfg_.inputs.size()) ||
+        cfg_.inputs[size_t(i)].type != InputSpec::Type::Media)
+        return {};
+    return cfg_.inputs[size_t(i)].mediaPlaylist;
 }
 
 void Engine::requestRecording(std::string path) {
@@ -119,6 +140,7 @@ Engine::RecordingState Engine::recordingState() const {
 
 bool Engine::start(const EngineConfig& cfg) {
     cfg_ = cfg;
+    for (auto& spec : cfg_.inputs) normalizeMediaSpec(spec);
     if (!vk_.init(cfg.validation)) return false;
     if (!ndi::initialize()) return false;
 
@@ -169,7 +191,7 @@ bool Engine::start(const EngineConfig& cfg) {
         else if (spec.type == InputSpec::Type::Media)
             inputs_.push_back(std::make_unique<MediaInput>(
                 vk_, q, cuda_, spec.ref, int(i), spec.syncFrames,
-                spec.mediaPlaying, spec.mediaLoop));
+                spec.mediaPlaying, spec.mediaLoop, spec.mediaPlaylist));
         else if (spec.type == InputSpec::Type::Omt)
 #ifdef MOO_HAVE_OMT
             inputs_.push_back(std::make_unique<OmtInput>(
@@ -516,6 +538,10 @@ void Engine::renderLoop(std::stop_token st) {
                         cfg_.inputs[size_t(c.arg)].mediaLoop = c.arg2 != 0;
                     }
                     break;
+                case Command::Type::MediaStep:
+                    if (c.arg >= 0 && c.arg < N)
+                        inputs_[size_t(c.arg)]->stepMedia(c.arg2);
+                    break;
             }
         }
 
@@ -548,7 +574,8 @@ void Engine::renderLoop(std::stop_token st) {
                 else if (spec.type == InputSpec::Type::Media)
                     inputs_[size_t(idx)] = std::make_unique<MediaInput>(
                         vk_, q, cuda_, spec.ref, idx, spec.syncFrames,
-                        spec.mediaPlaying, spec.mediaLoop);
+                        spec.mediaPlaying, spec.mediaLoop,
+                        spec.mediaPlaylist);
 #ifdef MOO_HAVE_OMT
                 else if (spec.type == InputSpec::Type::Omt)
                     inputs_[size_t(idx)] = std::make_unique<OmtInput>(

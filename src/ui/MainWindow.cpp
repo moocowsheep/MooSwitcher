@@ -729,7 +729,7 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     mediaRoot->setSpacing(8);
     mediaRoot->addWidget(makeSectionTitle(
         QStringLiteral("MEDIA PLAYERS"),
-        QStringLiteral("LOCAL H.264 / HEVC CLIPS PATCHED AS INPUTS")));
+        QStringLiteral("LOCAL H.264 / HEVC PLAYLISTS PATCHED AS INPUTS")));
     for (int i = 0; i < bridge_.inputCount(); ++i) {
         auto* card = new QFrame;
         card->setObjectName(QStringLiteral("modulePanel"));
@@ -744,9 +744,12 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
         row->addWidget(controls.name, 1);
         controls.time = new QLabel(QStringLiteral("— / —"));
         controls.time->setObjectName(QStringLiteral("subtleText"));
-        controls.time->setMinimumWidth(110);
+        controls.time->setMinimumWidth(260);
         controls.time->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         row->addWidget(controls.time);
+        controls.previous = new QPushButton(QStringLiteral("◀  PREV"));
+        controls.previous->setObjectName(QStringLiteral("actionButton"));
+        row->addWidget(controls.previous);
         controls.restart = new QPushButton(QStringLiteral("↺  RESTART"));
         controls.restart->setObjectName(QStringLiteral("actionButton"));
         row->addWidget(controls.restart);
@@ -754,7 +757,10 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
         controls.play->setObjectName(QStringLiteral("actionButton"));
         controls.play->setCheckable(true);
         row->addWidget(controls.play);
-        controls.loop = new QPushButton(QStringLiteral("LOOP"));
+        controls.next = new QPushButton(QStringLiteral("NEXT  ▶"));
+        controls.next->setObjectName(QStringLiteral("actionButton"));
+        row->addWidget(controls.next);
+        controls.loop = new QPushButton(QStringLiteral("LOOP LIST"));
         controls.loop->setObjectName(QStringLiteral("actionButton"));
         controls.loop->setCheckable(true);
         row->addWidget(controls.loop);
@@ -765,6 +771,10 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
                 });
         connect(controls.restart, &QPushButton::clicked, &bridge_,
                 [&bridge = bridge_, i] { bridge.restartMedia(i); });
+        connect(controls.previous, &QPushButton::clicked, &bridge_,
+                [&bridge = bridge_, i] { bridge.stepMedia(i, -1); });
+        connect(controls.next, &QPushButton::clicked, &bridge_,
+                [&bridge = bridge_, i] { bridge.stepMedia(i, 1); });
         connect(controls.loop, &QPushButton::clicked, &bridge_,
                 [&bridge = bridge_, i](bool loop) {
                     bridge.setMediaLoop(i, loop);
@@ -1004,6 +1014,9 @@ ShowFile::State MainWindow::collectState() const {
         if (media.available) {
             spec.mediaPlaying = media.playing;
             spec.mediaLoop = media.loop;
+            spec.mediaPlaylist = bridge_.mediaPlaylistItems(i);
+            if (!spec.mediaPlaylist.empty())
+                spec.ref = spec.mediaPlaylist.front().path;
         }
         state.cfg.inputs.push_back(std::move(spec));
     }
@@ -1072,21 +1085,35 @@ void MainWindow::refreshMediaControls() {
         auto& row = mediaRows_[size_t(i)];
         const auto state = bridge_.mediaState(i);
         const bool available = state.available;
+        const QString currentRef =
+            QString::fromStdString(state.currentRef);
         row.name->setText(
             available
-                ? QStringLiteral("INPUT %1   ·   %2")
+                ? QStringLiteral("INPUT %1   ·   CLIP %2/%3   ·   %4")
                       .arg(i + 1, 2, 10, QLatin1Char('0'))
-                      .arg(displayName(bridge_.inputRef(i)))
-                : QStringLiteral("INPUT %1   ·   NO MEDIA CLIP")
+                      .arg(state.playlistIndex + 1)
+                      .arg(state.playlistSize)
+                      .arg(displayName(currentRef))
+                : QStringLiteral("INPUT %1   ·   NO MEDIA PLAYLIST")
                       .arg(i + 1, 2, 10, QLatin1Char('0')));
         row.time->setText(
             available
-                ? QStringLiteral("%1 / %2")
+                ? QStringLiteral("%1 / %2   ·   %3 → %4   ·   ×%5")
                       .arg(formatTime(state.positionMs),
-                           formatTime(state.durationMs))
+                           formatTime(state.durationMs),
+                           formatTime(state.trimInMs),
+                           state.trimOutMs > 0
+                               ? formatTime(state.trimOutMs)
+                               : QStringLiteral("END"),
+                           QString::number(
+                               double(state.speedPermille) / 1000.0,
+                               'f', 2))
                 : QStringLiteral("— / —"));
-        for (auto* button : {row.play, row.restart, row.loop})
+        for (auto* button : {row.play, row.previous, row.restart, row.next,
+                             row.loop})
             button->setEnabled(available);
+        row.previous->setEnabled(available && state.playlistSize > 1);
+        row.next->setEnabled(available && state.playlistSize > 1);
 
         row.play->blockSignals(true);
         row.play->setChecked(available && state.playing);

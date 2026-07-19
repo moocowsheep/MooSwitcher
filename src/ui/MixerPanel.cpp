@@ -39,7 +39,13 @@ QString shortSourceName(QString ref) {
 // OMT names have no scheme, so text alone cannot distinguish them.
 class SourcePickerDialog : public QDialog {
 public:
-    enum { kTypeRole = Qt::UserRole, kNameRole = Qt::UserRole + 1 };
+    enum {
+        kTypeRole = Qt::UserRole,
+        kNameRole = Qt::UserRole + 1,
+        kInRole = Qt::UserRole + 2,
+        kOutRole = Qt::UserRole + 3,
+        kSpeedRole = Qt::UserRole + 4,
+    };
 
     SourcePickerDialog(EngineBridge& bridge, int input, QWidget* parent)
         : QDialog(parent), bridge_(bridge) {
@@ -53,7 +59,7 @@ public:
         title->setObjectName(QStringLiteral("sectionTitle"));
         col->addWidget(title);
         auto* hint = new QLabel(QStringLiteral(
-            "Choose a discovered source, or enter an NDI name / SRT / OMT URL."));
+            "Choose a discovered source, enter a URL, or build an ordered media playlist."));
         hint->setObjectName(QStringLiteral("sectionHint"));
         col->addWidget(hint);
 
@@ -70,22 +76,82 @@ public:
         refreshBtn->setObjectName(QStringLiteral("actionButton"));
         connect(refreshBtn, &QPushButton::clicked, this, [this] { refresh(); });
         manualRow->addWidget(refreshBtn);
-        auto* mediaBtn = new QPushButton(QStringLiteral("OPEN MEDIA"));
+        auto* mediaBtn = new QPushButton(QStringLiteral("ADD CLIPS"));
         mediaBtn->setObjectName(QStringLiteral("actionButton"));
-        connect(mediaBtn, &QPushButton::clicked, this, [this] {
-            const QString path = QFileDialog::getOpenFileName(
-                this, QStringLiteral("Open media clip"), {},
-                QStringLiteral(
-                    "Video files (*.mkv *.mp4 *.mov *.m4v *.ts);;All files (*)"));
-            if (path.isEmpty()) return;
-            mediaChosen_ = true;
-            manual_->setText(path);
-            sync_->setCurrentIndex(0);
-        });
+        connect(mediaBtn, &QPushButton::clicked, this,
+                [this] { addMedia(); });
         manualRow->addWidget(mediaBtn);
         col->addLayout(manualRow);
         connect(manual_, &QLineEdit::textEdited, this,
                 [this] { mediaChosen_ = false; });
+
+        auto* playlistLabel = new QLabel(QStringLiteral(
+            "MEDIA PLAYLIST   ·   clips advance top-to-bottom"));
+        playlistLabel->setObjectName(QStringLiteral("eyebrow"));
+        col->addWidget(playlistLabel);
+        playlist_ = new QListWidget;
+        playlist_->setMaximumHeight(105);
+        for (const auto& item : bridge.mediaPlaylistItems(input))
+            addPlaylistItem(item);
+        col->addWidget(playlist_);
+
+        auto* trimRow = new QHBoxLayout;
+        auto* trimLabel = new QLabel(QStringLiteral("TRIM"));
+        trimLabel->setObjectName(QStringLiteral("eyebrow"));
+        trimRow->addWidget(trimLabel);
+        trimRow->addWidget(new QLabel(QStringLiteral("IN")));
+        trimIn_ = new QSpinBox;
+        trimIn_->setRange(0, 86'400'000);
+        trimIn_->setSpecialValueText(QStringLiteral("START"));
+        trimIn_->setSuffix(QStringLiteral(" ms"));
+        trimIn_->setToolTip(
+            QStringLiteral("Inclusive in point, relative to source start"));
+        trimRow->addWidget(trimIn_, 1);
+        trimRow->addWidget(new QLabel(QStringLiteral("OUT")));
+        trimOut_ = new QSpinBox;
+        trimOut_->setRange(0, 86'400'000);
+        trimOut_->setSpecialValueText(QStringLiteral("END"));
+        trimOut_->setSuffix(QStringLiteral(" ms"));
+        trimOut_->setToolTip(
+            QStringLiteral("Exclusive out point; END plays through EOF"));
+        trimRow->addWidget(trimOut_, 1);
+        trimRow->addWidget(new QLabel(QStringLiteral("SPEED")));
+        speed_ = new QSpinBox;
+        speed_->setRange(25, 400);
+        speed_->setValue(100);
+        speed_->setSuffix(QStringLiteral(" %"));
+        speed_->setToolTip(QStringLiteral(
+            "Playback speed; audio tempo is adjusted without changing pitch"));
+        trimRow->addWidget(speed_, 1);
+        col->addLayout(trimRow);
+        connect(playlist_, &QListWidget::currentRowChanged, this,
+                [this](int row) { loadTrim(row); });
+        connect(trimIn_, &QSpinBox::valueChanged, this,
+                [this] { storeTrim(); });
+        connect(trimOut_, &QSpinBox::valueChanged, this,
+                [this] { storeTrim(); });
+        connect(speed_, &QSpinBox::valueChanged, this,
+                [this] { storeTrim(); });
+
+        auto* playlistButtons = new QHBoxLayout;
+        const auto addPlaylistButton = [&](const QString& text, auto action) {
+            auto* button = new QPushButton(text);
+            button->setObjectName(QStringLiteral("actionButton"));
+            connect(button, &QPushButton::clicked, this, action);
+            playlistButtons->addWidget(button);
+        };
+        addPlaylistButton(QStringLiteral("REMOVE"), [this] {
+            if (auto* item = playlist_->takeItem(playlist_->currentRow())) {
+                delete item;
+                mediaChosen_ = playlist_->count() > 0;
+            }
+        });
+        addPlaylistButton(QStringLiteral("MOVE UP"),
+                          [this] { moveMedia(-1); });
+        addPlaylistButton(QStringLiteral("MOVE DOWN"),
+                          [this] { moveMedia(1); });
+        playlistButtons->addStretch(1);
+        col->addLayout(playlistButtons);
 
         auto* syncRow = new QHBoxLayout;
         auto* syncLabel = new QLabel(QStringLiteral("FRAME SYNC"));
@@ -107,11 +173,16 @@ public:
         connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
         connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
         connect(list_, &QListWidget::itemDoubleClicked, this, &QDialog::accept);
+        connect(list_, &QListWidget::itemClicked, this,
+                [this] { mediaChosen_ = false; });
+        if (playlist_->count() > 0) playlist_->setCurrentRow(0);
         col->addWidget(buttons);
-        resize(560, 450);
+        resize(620, 590);
     }
 
     QString chosen() const {
+        if (mediaChosen_ && playlist_->count() > 0)
+            return playlist_->item(0)->data(kNameRole).toString();
         const QString manual = manual_->text().trimmed();
         if (!manual.isEmpty()) return manual;
         if (auto* item = list_->currentItem())
@@ -121,7 +192,7 @@ public:
 
     // -1 = infer from the ref (manual entry); explicit for discovery rows.
     int chosenType() const {
-        if (mediaChosen_) return 3;
+        if (mediaChosen_ && playlist_->count() > 0) return 3;
         if (!manual_->text().trimmed().isEmpty()) return -1;
         if (auto* item = list_->currentItem())
             return item->data(kTypeRole).toInt();
@@ -130,6 +201,20 @@ public:
 
     int syncFrames() const { return sync_->currentIndex() - 1; }
 
+    std::vector<media::PlaylistItem> chosenPlaylist() const {
+        std::vector<media::PlaylistItem> items;
+        if (!mediaChosen_) return items;
+        items.reserve(size_t(playlist_->count()));
+        for (int i = 0; i < playlist_->count(); ++i) {
+            const auto* row = playlist_->item(i);
+            items.emplace_back(row->data(kNameRole).toString().toStdString(),
+                               row->data(kInRole).toLongLong(),
+                               row->data(kOutRole).toLongLong(),
+                               row->data(kSpeedRole).toInt());
+        }
+        return items;
+    }
+
 private:
     void addSource(const QString& name, int type, const QString& badge) {
         auto* item = new QListWidgetItem(
@@ -137,6 +222,102 @@ private:
         item->setData(kTypeRole, type);
         item->setData(kNameRole, name);
         list_->addItem(item);
+    }
+
+    static QString formatTrimTime(int64_t milliseconds, bool end = false) {
+        if (end && milliseconds == 0) return QStringLiteral("END");
+        const int64_t seconds = milliseconds / 1000;
+        return QStringLiteral("%1:%2.%3")
+            .arg(seconds / 60, 2, 10, QLatin1Char('0'))
+            .arg(seconds % 60, 2, 10, QLatin1Char('0'))
+            .arg(milliseconds % 1000, 3, 10, QLatin1Char('0'));
+    }
+
+    void refreshPlaylistItem(QListWidgetItem* item) {
+        if (!item) return;
+        const QString path = item->data(kNameRole).toString();
+        const int64_t inMs = item->data(kInRole).toLongLong();
+        const int64_t outMs = item->data(kOutRole).toLongLong();
+        const int speedPermille = item->data(kSpeedRole).toInt();
+        item->setText(
+            QStringLiteral("%1   ·   %2 → %3   ·   ×%4   ·   %5")
+                .arg(QFileInfo(path).fileName(), formatTrimTime(inMs),
+                     formatTrimTime(outMs, true),
+                     QString::number(double(speedPermille) / 1000.0, 'f', 2),
+                     QFileInfo(path).absolutePath()));
+        item->setToolTip(path);
+    }
+
+    void addPlaylistItem(const media::PlaylistItem& clip) {
+        auto* item = new QListWidgetItem;
+        item->setData(kNameRole, QString::fromStdString(clip.path));
+        item->setData(kInRole, qlonglong(clip.inMs));
+        item->setData(kOutRole, qlonglong(clip.outMs));
+        item->setData(kSpeedRole, clip.speedPermille);
+        refreshPlaylistItem(item);
+        playlist_->addItem(item);
+    }
+
+    void loadTrim(int row) {
+        const bool valid = row >= 0 && row < playlist_->count();
+        trimIn_->setEnabled(valid);
+        trimOut_->setEnabled(valid);
+        speed_->setEnabled(valid);
+        trimIn_->blockSignals(true);
+        trimOut_->blockSignals(true);
+        speed_->blockSignals(true);
+        trimIn_->setValue(
+            valid ? int(playlist_->item(row)->data(kInRole).toLongLong()) : 0);
+        trimOut_->setValue(
+            valid ? int(playlist_->item(row)->data(kOutRole).toLongLong()) : 0);
+        speed_->setValue(
+            valid ? playlist_->item(row)->data(kSpeedRole).toInt() / 10 : 100);
+        trimIn_->blockSignals(false);
+        trimOut_->blockSignals(false);
+        speed_->blockSignals(false);
+    }
+
+    void storeTrim() {
+        auto* item = playlist_->currentItem();
+        if (!item) return;
+        int inMs = trimIn_->value();
+        int outMs = trimOut_->value();
+        if (outMs > 0 && outMs <= inMs) {
+            outMs = inMs < trimOut_->maximum() ? inMs + 1 : 0;
+            trimOut_->blockSignals(true);
+            trimOut_->setValue(outMs);
+            trimOut_->blockSignals(false);
+        }
+        item->setData(kInRole, qlonglong(inMs));
+        item->setData(kOutRole, qlonglong(outMs));
+        item->setData(kSpeedRole, speed_->value() * 10);
+        refreshPlaylistItem(item);
+        mediaChosen_ = true;
+    }
+
+    void addMedia() {
+        const QStringList paths = QFileDialog::getOpenFileNames(
+            this, QStringLiteral("Add media clips"), {},
+            QStringLiteral(
+                "Video files (*.mkv *.mp4 *.mov *.m4v *.ts);;All files (*)"));
+        if (paths.isEmpty()) return;
+        for (const QString& path : paths)
+            addPlaylistItem(media::PlaylistItem{path.toStdString()});
+        mediaChosen_ = true;
+        manual_->clear();
+        list_->clearSelection();
+        sync_->setCurrentIndex(0);
+        playlist_->setCurrentRow(playlist_->count() - 1);
+    }
+
+    void moveMedia(int direction) {
+        const int row = playlist_->currentRow();
+        const int target = row + direction;
+        if (row < 0 || target < 0 || target >= playlist_->count()) return;
+        auto* item = playlist_->takeItem(row);
+        playlist_->insertItem(target, item);
+        playlist_->setCurrentRow(target);
+        mediaChosen_ = true;
     }
 
     void refresh() {
@@ -155,8 +336,12 @@ private:
 
     EngineBridge& bridge_;
     QListWidget* list_ = nullptr;
+    QListWidget* playlist_ = nullptr;
     QLineEdit* manual_ = nullptr;
     QComboBox* sync_ = nullptr;
+    QSpinBox* trimIn_ = nullptr;
+    QSpinBox* trimOut_ = nullptr;
+    QSpinBox* speed_ = nullptr;
     bool mediaChosen_ = false;
 };
 
@@ -286,6 +471,25 @@ MixerPanel::MixerPanel(EngineBridge& bridge, const QStringList& names,
             const bool keep = dialog.chosen().isEmpty();
             const QString ref = keep ? bridge_.inputRef(i) : dialog.chosen();
             if (ref.isEmpty()) return;
+            const auto playlist = dialog.chosenPlaylist();
+            if (!playlist.empty()) {
+                if (playlist == bridge_.mediaPlaylistItems(i) &&
+                    dialog.syncFrames() == bridge_.inputSyncFrames(i))
+                    return;
+                bridge_.replaceMediaPlaylist(i, playlist,
+                                             dialog.syncFrames());
+                return;
+            }
+            // A frame-sync-only edit must preserve an existing playlist.
+            if (keep && bridge_.inputType(i) == int(InputSpec::Type::Media)) {
+                const auto existing = bridge_.mediaPlaylistItems(i);
+                if (!existing.empty()) {
+                    if (dialog.syncFrames() != bridge_.inputSyncFrames(i))
+                        bridge_.replaceMediaPlaylist(
+                            i, existing, dialog.syncFrames());
+                    return;
+                }
+            }
             if (ref == bridge_.inputRef(i) &&
                 dialog.syncFrames() == bridge_.inputSyncFrames(i))
                 return;

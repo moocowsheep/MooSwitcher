@@ -9,7 +9,7 @@ tick overruns, 1.5-frame latency, <2 cores full pipeline, NVENC 54%), full audio
 within ±8 ms on NDI and SRT paths at 1080p and 8K), live source picker (swap NDI/SRT sources
 per input mid-show), show-file persistence (restart restores everything), health banners,
 runtime counters in the GUI, HEVC/AAC program recording, and paced local clip
-playback with transport controls. Per-input **frame sync**: re-times a source onto the output tick
+playlists with trim, speed, and transport controls. Per-input **frame sync**: re-times a source onto the output tick
 grid (1–4 frame buffer absorbs bursty delivery, rate slip becomes counted repeats/drops) and
 auto-aligns the input's audio to the re-timed video — the cross-session A/V phase lottery
 collapses to a constant (design + measurements: `docs/design-framesync.md`,
@@ -61,13 +61,17 @@ stalls program. Headless: `--record PATH.mkv [--record-bitrate KBPS]` (bitrate
 defaults from the output format).
 
 Local H.264/HEVC clips can occupy any input: open the input source picker and
-choose **OPEN MEDIA**, then use the **MEDIA** tab for play/pause, restart, and
-loop controls. The clip is timestamp-paced in real time, decoded through NVDEC,
-and its audio enters the normal mixer lane. The media path and loop setting
-persist in the show file; playback starts from the beginning after an application
-restart. Headless: `--media-input PATH`. This first media-player cut intentionally
-does not yet include playlists, trim points, speed control, still images, or
-instant replay.
+use **ADD CLIPS** to build and reorder a playlist, then use the **MEDIA** tab for
+previous/next, play/pause, restart, and whole-list loop controls. Each clip is
+timestamp-paced in real time, decoded through NVDEC, and its audio enters the
+normal mixer lane. Set inclusive **IN** and exclusive **OUT** times per clip in
+the playlist editor (`OUT=END` plays through EOF), plus a per-clip playback
+speed from 25–400%; audio tempo follows without changing pitch. Playlist order,
+trim points, speed, and loop mode persist in the show file; playback starts
+from the first clip after an application restart. Headless:
+`--media-input A.mkv --media-trim 500:2500 --media-speed 1.5 --media-item B.mkv`
+(`--media-no-loop` stops at the end; trim values are milliseconds). Still
+images and instant replay are not yet included.
 Design and validation notes: `docs/design-recorder-media.md`.
 
 Two downstream keyers composite graphics with **native alpha (NDI/OMT UYVA)** over program —
@@ -80,7 +84,9 @@ holds full rate; keyers-off cost is nil).
 
 ## Build
 
-Requires: gcc 14+/clang, CMake 3.25+, Ninja, and the NDI SDK 6.
+Requires: gcc 14+/clang, CMake 3.25+, Ninja, the NDI SDK 6, and FFmpeg
+development libraries (`libavcodec`, `libavformat`, `libavutil`, `libavfilter`,
+and `libswresample`).
 
 ```sh
 # NDI SDK (unprivileged): download + extract into third_party/ndi

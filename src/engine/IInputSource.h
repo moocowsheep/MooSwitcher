@@ -46,6 +46,12 @@ public:
         bool atEnd = false;
         int64_t positionMs = 0;
         int64_t durationMs = 0;
+        int playlistIndex = 0;
+        int playlistSize = 0;
+        int64_t trimInMs = 0;
+        int64_t trimOutMs = 0;
+        int speedPermille = 1000;
+        std::string currentRef;
     };
 
     virtual ~IInputSource() = default;
@@ -68,6 +74,7 @@ public:
     virtual void setMediaPlaying(bool /*playing*/) {}
     virtual void setMediaLoop(bool /*loop*/) {}
     virtual void restartMedia() {}
+    virtual void stepMedia(int /*direction*/) {}
 
     // Non-null when the input was created with frame sync enabled: the
     // capture thread pushes every publish here too; the render tick drains

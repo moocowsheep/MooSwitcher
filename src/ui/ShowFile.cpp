@@ -15,7 +15,8 @@ bool ShowFile::State::cfgEquals(const EngineConfig& a, const EngineConfig& b) {
         if (a.inputs[i].type != b.inputs[i].type ||
             a.inputs[i].ref != b.inputs[i].ref ||
             a.inputs[i].syncFrames != b.inputs[i].syncFrames ||
-            a.inputs[i].mediaLoop != b.inputs[i].mediaLoop)
+            a.inputs[i].mediaLoop != b.inputs[i].mediaLoop ||
+            a.inputs[i].mediaPlaylist != b.inputs[i].mediaPlaylist)
             return false;
     return a.show == b.show && a.ndiOut == b.ndiOut &&
            a.ndiOutName == b.ndiOutName && a.srtUrl == b.srtUrl &&
@@ -82,6 +83,33 @@ bool ShowFile::load(State& st) const {
         spec.syncFrames = s.value("framesync", spec.syncFrames).toInt();
         if (spec.syncFrames < -1 || spec.syncFrames > 4) spec.syncFrames = -1;
         spec.mediaLoop = s.value("mediaLoop", spec.mediaLoop).toBool();
+        if (spec.type == InputSpec::Type::Media) {
+            const QStringList playlist =
+                s.value("mediaPlaylist").toStringList();
+            const QStringList trimIns =
+                s.value("mediaTrimInMs").toStringList();
+            const QStringList trimOuts =
+                s.value("mediaTrimOutMs").toStringList();
+            const QStringList speeds =
+                s.value("mediaSpeedPermille").toStringList();
+            for (int item = 0; item < playlist.size(); ++item) {
+                if (playlist[item].isEmpty()) continue;
+                const int64_t inMs =
+                    item < trimIns.size() ? trimIns[item].toLongLong() : 0;
+                const int64_t outMs =
+                    item < trimOuts.size() ? trimOuts[item].toLongLong() : 0;
+                const int speedPermille =
+                    item < speeds.size() ? speeds[item].toInt() : 1000;
+                media::PlaylistItem clip{playlist[item].toStdString(), inMs,
+                                         outMs, speedPermille};
+                media::normalizePlaylistItem(clip);
+                spec.mediaPlaylist.push_back(std::move(clip));
+            }
+            if (spec.mediaPlaylist.empty() && !spec.ref.empty())
+                spec.mediaPlaylist.emplace_back(spec.ref);
+            if (!spec.mediaPlaylist.empty())
+                spec.ref = spec.mediaPlaylist.front().path;
+        }
         st.cfg.inputs.push_back(std::move(spec));
     }
     s.endArray();
@@ -151,8 +179,28 @@ void ShowFile::save(const State& st) const {
         s.setValue("framesync", spec.syncFrames);
         if (spec.type == InputSpec::Type::Media) {
             s.setValue("mediaLoop", spec.mediaLoop);
+            QStringList playlist;
+            QStringList trimIns;
+            QStringList trimOuts;
+            QStringList speeds;
+            for (const auto& item : spec.mediaPlaylist) {
+                playlist << QString::fromStdString(item.path);
+                trimIns << QString::number(item.inMs);
+                trimOuts << QString::number(item.outMs);
+                speeds << QString::number(item.speedPermille);
+            }
+            if (playlist.isEmpty() && !spec.ref.empty())
+                playlist << QString::fromStdString(spec.ref);
+            s.setValue("mediaPlaylist", playlist);
+            s.setValue("mediaTrimInMs", trimIns);
+            s.setValue("mediaTrimOutMs", trimOuts);
+            s.setValue("mediaSpeedPermille", speeds);
         } else {
             s.remove("mediaLoop");
+            s.remove("mediaPlaylist");
+            s.remove("mediaTrimInMs");
+            s.remove("mediaTrimOutMs");
+            s.remove("mediaSpeedPermille");
         }
         // A restored show cues media from its start and plays; pause is an
         // ephemeral transport state, not a startup mode.

@@ -20,6 +20,7 @@ struct Command {
         MediaSetPlaying,  // arg = input index, arg2 = bool
         MediaRestart,     // arg = input index
         MediaSetLoop,     // arg = input index, arg2 = bool
+        MediaStep,        // arg = input index, arg2 = -1 previous / +1 next
     } type = Type::Cut;
     int arg = 0;
     int arg2 = 0;

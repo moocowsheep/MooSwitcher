@@ -67,6 +67,8 @@ private:
     struct MediaRow {
         QLabel* name = nullptr;
         QLabel* time = nullptr;
+        QPushButton* previous = nullptr;
+        QPushButton* next = nullptr;
         QPushButton* play = nullptr;
         QPushButton* restart = nullptr;
         QPushButton* loop = nullptr;

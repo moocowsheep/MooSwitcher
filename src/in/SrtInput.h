@@ -9,9 +9,11 @@
 #include "gpu/Nv12Ring.h"
 #include "gpu/VkEngine.h"
 #include "media/CudaCtx.h"
+#include "media/Playlist.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavfilter/avfilter.h>
 #include <libavformat/avformat.h>
 #include <libswresample/swresample.h>
 }
@@ -33,7 +35,8 @@ public:
     SrtInput(gpu::VkEngine& eng, gpu::Queue& uploadQueue, media::CudaCtx& cuda,
              std::string url, int index, int syncFrames = -1,
              bool mediaMode = false, bool mediaPlaying = true,
-             bool mediaLoop = true);
+             bool mediaLoop = true,
+             std::vector<media::PlaylistItem> mediaPlaylist = {});
     ~SrtInput() override;
 
     std::optional<Mailbox::Item> newer(uint64_t lastSeq) const override {
@@ -47,6 +50,7 @@ public:
     void setMediaPlaying(bool playing) override;
     void setMediaLoop(bool loop) override;
     void restartMedia() override;
+    void stepMedia(int direction) override;
 
     void attachAudioSink(audio::InputChannel* ch) override {
         audioSink_.store(ch, std::memory_order_release);
@@ -60,8 +64,16 @@ private:
     void closeStream();
     void handleFrame(AVFrame* f);
     void handleAudioFrame(AVFrame* f);
+    bool initAudioTempo(const AVFrame* f, int speedPermille);
+    void closeAudioTempo();
+    void drainAudioTempo();
     bool paceTimestamp(int streamIndex, int64_t timestamp,
                        std::stop_token stop);
+    int64_t mediaTimestampMs(int streamIndex, int64_t timestamp) const;
+    bool advanceMedia();
+    void selectMedia(int index);
+    media::PlaylistItem currentMediaItem() const;
+    std::string currentMediaRef() const;
     static int interruptCb(void* opaque);
     static AVPixelFormat pickCuda(AVCodecContext*, const AVPixelFormat* fmts);
 
@@ -84,6 +96,11 @@ private:
     int swrInRate_ = 0;
     int swrInFmt_ = -1;
     std::vector<float> aconv_;  // decode-thread scratch
+    AVFilterGraph* afGraph_ = nullptr;
+    AVFilterContext* afSource_ = nullptr;
+    AVFilterContext* afSink_ = nullptr;
+    AVFrame* afFrame_ = nullptr;
+    int afSpeedPermille_ = 1000;
 
     std::shared_ptr<gpu::Nv12Ring> ring_;
     std::vector<media::CudaCtx::Imported> imports_;  // one per ring slot
@@ -97,6 +114,9 @@ private:
     std::atomic<bool> mediaPlaying_{true};
     std::atomic<bool> mediaLoop_{true};
     std::atomic<bool> mediaRestart_{false};
+    std::vector<media::PlaylistItem> mediaPlaylist_;
+    std::atomic<int> mediaIndex_{0};
+    std::atomic<int> mediaSelect_{-1};
     std::atomic<bool> mediaAtEnd_{false};
     std::atomic<int64_t> mediaPositionMs_{0};
     std::atomic<int64_t> mediaDurationMs_{0};
@@ -104,6 +124,7 @@ private:
     int64_t mediaStartMonoNs_ = 0;
     int64_t mediaPauseMonoNs_ = 0;
     bool mediaWasPlaying_ = false;
+    bool mediaClipDone_ = false;
     std::atomic<audio::InputChannel*> audioSink_{nullptr};
     std::atomic<bool> connected_{false};
     std::atomic<bool> stopFlag_{false};
@@ -118,9 +139,10 @@ class MediaInput final : public SrtInput {
 public:
     MediaInput(gpu::VkEngine& eng, gpu::Queue& uploadQueue,
                media::CudaCtx& cuda, std::string path, int index,
-               int syncFrames = -1, bool playing = true, bool loop = true)
+               int syncFrames = -1, bool playing = true, bool loop = true,
+               std::vector<media::PlaylistItem> playlist = {})
         : SrtInput(eng, uploadQueue, cuda, std::move(path), index, syncFrames,
-                   true, playing, loop) {}
+                   true, playing, loop, std::move(playlist)) {}
 };
 
 }  // namespace moo

@@ -5,6 +5,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "audio/AudioEngine.h"
@@ -21,6 +22,7 @@
 #include "ndi/NdiReceiver.h"
 
 #include "media/CudaCtx.h"
+#include "media/Playlist.h"
 
 namespace moo {
 
@@ -37,6 +39,12 @@ struct InputSpec {
     int syncFrames = -1;
     bool mediaPlaying = true;
     bool mediaLoop = true;
+    // Ordered local clips. Empty means the legacy/single-clip `ref`.
+    std::vector<media::PlaylistItem> mediaPlaylist;
+
+    InputSpec() = default;
+    InputSpec(Type inputType, std::string inputRef, int frames = -1)
+        : type(inputType), ref(std::move(inputRef)), syncFrames(frames) {}
 };
 
 struct EngineConfig {
@@ -84,6 +92,7 @@ public:
     InputSpec::Type inputType(int i) const;
     int inputSyncFrames(int i) const;   // current frame-sync setting (-1 off)
     IInputSource::MediaState inputMediaState(int i) const;
+    std::vector<media::PlaylistItem> inputMediaPlaylist(int i) const;
 
     struct RecordingState {
         bool active = false;

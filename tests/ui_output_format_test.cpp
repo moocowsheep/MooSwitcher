@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QLabel>
+#include <QSettings>
 #include <QTemporaryDir>
 
 #include <memory>
@@ -65,7 +66,7 @@ TEST_CASE("show file preserves the exact output format") {
     CHECK(restored.cfg.show.fpsD == 1001);
 }
 
-TEST_CASE("show file restores media inputs and loop mode") {
+TEST_CASE("show file restores playlists, trim, speed, and loop mode") {
     QTemporaryDir temporary;
     REQUIRE(temporary.isValid());
 
@@ -74,6 +75,11 @@ TEST_CASE("show file restores media inputs and loop mode") {
     InputSpec media;
     media.type = InputSpec::Type::Media;
     media.ref = "/shows/roll-in.mkv";
+    media.mediaPlaylist = {
+        {"/shows/roll-in.mkv", 500, 3'500, 1250},
+        {"/shows/guest-intro.mkv", 1'250, 0, 750},
+        {"/shows/bumper.mkv", 0, 1'000, 2000},
+    };
     media.syncFrames = -1;
     media.mediaPlaying = false;  // pause is deliberately session-only
     media.mediaLoop = false;
@@ -85,9 +91,33 @@ TEST_CASE("show file restores media inputs and loop mode") {
     REQUIRE(restored.cfg.inputs.size() == 1);
     CHECK(restored.cfg.inputs[0].type == InputSpec::Type::Media);
     CHECK(restored.cfg.inputs[0].ref == "/shows/roll-in.mkv");
+    CHECK(restored.cfg.inputs[0].mediaPlaylist == media.mediaPlaylist);
     CHECK(restored.cfg.inputs[0].syncFrames == -1);
     CHECK(restored.cfg.inputs[0].mediaPlaying);
     CHECK_FALSE(restored.cfg.inputs[0].mediaLoop);
+}
+
+TEST_CASE("legacy single-clip show file becomes a one-item playlist") {
+    QTemporaryDir temporary;
+    REQUIRE(temporary.isValid());
+    const QString path = temporary.filePath(QStringLiteral("show.ini"));
+    {
+        QSettings settings(path, QSettings::IniFormat);
+        settings.beginWriteArray(QStringLiteral("inputs"), 1);
+        settings.setArrayIndex(0);
+        settings.setValue(QStringLiteral("type"), QStringLiteral("media"));
+        settings.setValue(QStringLiteral("ref"),
+                          QStringLiteral("/shows/legacy.mkv"));
+        settings.endArray();
+    }
+
+    ShowFile file(path);
+    ShowFile::State restored;
+    REQUIRE(file.load(restored));
+    REQUIRE(restored.cfg.inputs.size() == 1);
+    CHECK(restored.cfg.inputs[0].ref == "/shows/legacy.mkv");
+    CHECK(restored.cfg.inputs[0].mediaPlaylist ==
+          std::vector<media::PlaylistItem>{{"/shows/legacy.mkv"}});
 }
 
 TEST_CASE("output format badge tracks and saves pending selections") {

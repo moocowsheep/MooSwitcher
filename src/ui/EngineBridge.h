@@ -45,6 +45,9 @@ public slots:
     void setMediaLoop(int input, bool loop) {
         engine_.post({Command::Type::MediaSetLoop, input, loop ? 1 : 0, 0.f});
     }
+    void stepMedia(int input, int direction) {
+        engine_.post({Command::Type::MediaStep, input, direction, 0.f});
+    }
     void startRecording(QString path);
     void stopRecording() { engine_.requestRecording({}); }
 
@@ -61,6 +64,8 @@ public slots:
     // 0 measure-only (auto A/V trim), 1..4 buffered. Takes effect at the
     // next render tick.
     void replaceInput(int input, QString ref, int syncFrames, int type = -1);
+    void replaceMediaPlaylist(
+        int input, std::vector<media::PlaylistItem> items, int syncFrames);
 
 public:
     bool audioAvailable() const { return engine_.audio() != nullptr; }
@@ -76,6 +81,9 @@ public:
     int inputType(int input) const;
     IInputSource::MediaState mediaState(int input) const {
         return engine_.inputMediaState(input);
+    }
+    std::vector<media::PlaylistItem> mediaPlaylistItems(int input) const {
+        return engine_.inputMediaPlaylist(input);
     }
     Engine::RecordingState recordingState() const {
         return engine_.recordingState();

@@ -72,7 +72,8 @@ target_link_libraries(CudaDriver INTERFACE ${CUDA_DRIVER_LIB})
 target_include_directories(CudaDriver SYSTEM INTERFACE ${CUDA_DRIVER_INC})
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavformat libavutil libswresample)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+  libavcodec libavformat libavutil libavfilter libswresample)
 
 add_library(moo_media STATIC
   src/media/CudaCtx.cpp
@@ -202,6 +203,7 @@ if(MOO_BUILD_TESTS)
     tests/strip_test.cpp
     tests/audio_test.cpp
     tests/aac_test.cpp
+    tests/media_playlist_test.cpp
     tests/gpu_composite_test.cpp
     tests/interop_test.cpp
   )
