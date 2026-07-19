@@ -16,6 +16,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include "media/StillImage.h"
 #include "ui/MixerPanel.h"
 
 namespace moo::ui {
@@ -335,7 +336,10 @@ QString displayName(QString ref) {
     else if (ref.startsWith(QStringLiteral("omt://"), Qt::CaseInsensitive))
         ref = QStringLiteral("OMT · ") + ref.mid(6);
     else if (QFileInfo(ref).isAbsolute())
-        ref = QStringLiteral("MEDIA · ") + QFileInfo(ref).fileName();
+        ref = (media::isStillImagePath(ref.toStdString())
+                   ? QStringLiteral("STILL · ")
+                   : QStringLiteral("MEDIA · ")) +
+              QFileInfo(ref).fileName();
     if (ref.isEmpty()) return QStringLiteral("NO SOURCE");
     return ref;
 }

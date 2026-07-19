@@ -8,6 +8,7 @@
 #include "core/Stats.h"
 #include "engine/FrameSync.h"
 #include "in/SrtInput.h"
+#include "in/StillInput.h"
 #include "ndi/NdiLib.h"
 #include "out/FileRecorder.h"
 #include "out/NdiOutput.h"
@@ -21,7 +22,12 @@
 namespace moo {
 
 namespace {
-void normalizeMediaSpec(InputSpec& spec) {
+void normalizeInputSpec(InputSpec& spec) {
+    if (spec.type == InputSpec::Type::Still) {
+        // A static frame has no source cadence or audio to re-time.
+        spec.syncFrames = -1;
+        return;
+    }
     if (spec.type != InputSpec::Type::Media) return;
     if (spec.mediaPlaylist.empty() && !spec.ref.empty())
         spec.mediaPlaylist.emplace_back(spec.ref);
@@ -42,7 +48,7 @@ int64_t Engine::srtFramesEncoded() const {
 bool Engine::srtConnected() const { return srtOut_ && srtOut_->connected(); }
 
 void Engine::requestInputReplace(int index, InputSpec spec) {
-    normalizeMediaSpec(spec);
+    normalizeInputSpec(spec);
     std::lock_guard lk(replaceM_);
     pendingReplace_.emplace_back(index, std::move(spec));
 }
@@ -140,7 +146,7 @@ Engine::RecordingState Engine::recordingState() const {
 
 bool Engine::start(const EngineConfig& cfg) {
     cfg_ = cfg;
-    for (auto& spec : cfg_.inputs) normalizeMediaSpec(spec);
+    for (auto& spec : cfg_.inputs) normalizeInputSpec(spec);
     if (!vk_.init(cfg.validation)) return false;
     if (!ndi::initialize()) return false;
 
@@ -192,6 +198,9 @@ bool Engine::start(const EngineConfig& cfg) {
             inputs_.push_back(std::make_unique<MediaInput>(
                 vk_, q, cuda_, spec.ref, int(i), spec.syncFrames,
                 spec.mediaPlaying, spec.mediaLoop, spec.mediaPlaylist));
+        else if (spec.type == InputSpec::Type::Still)
+            inputs_.push_back(std::make_unique<StillInput>(
+                vk_, q, spec.ref, int(i), cfg_.show.fpsN, cfg_.show.fpsD));
         else if (spec.type == InputSpec::Type::Omt)
 #ifdef MOO_HAVE_OMT
             inputs_.push_back(std::make_unique<OmtInput>(
@@ -576,6 +585,10 @@ void Engine::renderLoop(std::stop_token st) {
                         vk_, q, cuda_, spec.ref, idx, spec.syncFrames,
                         spec.mediaPlaying, spec.mediaLoop,
                         spec.mediaPlaylist);
+                else if (spec.type == InputSpec::Type::Still)
+                    inputs_[size_t(idx)] = std::make_unique<StillInput>(
+                        vk_, q, spec.ref, idx, cfg_.show.fpsN,
+                        cfg_.show.fpsD);
 #ifdef MOO_HAVE_OMT
                 else if (spec.type == InputSpec::Type::Omt)
                     inputs_[size_t(idx)] = std::make_unique<OmtInput>(
@@ -612,6 +625,7 @@ void Engine::renderLoop(std::stop_token st) {
                 const char* kind =
                     spec.type == InputSpec::Type::Srt     ? " (srt)"
                     : spec.type == InputSpec::Type::Media ? " (media)"
+                    : spec.type == InputSpec::Type::Still ? " (still)"
                                                          : "";
                 MOO_LOGI("in%d: replaced with '%s'%s", idx, spec.ref.c_str(),
                          kind);
@@ -755,11 +769,14 @@ void Engine::renderLoop(std::stop_token st) {
                     cur[size_t(i)] = take->value;
                     seq[size_t(i)] = take->seq;
                     lastNewTick[size_t(i)] = n;
-                } else if (cur[size_t(i)]) {
+                } else if (cur[size_t(i)] &&
+                           !inputs_[size_t(i)]->frameIsPersistent()) {
                     repeatCtr[size_t(i)]->add();
                 }
             }
-            if (cur[size_t(i)] && n - lastNewTick[size_t(i)] > staleTicks)
+            if (cur[size_t(i)] &&
+                !inputs_[size_t(i)]->frameIsPersistent() &&
+                n - lastNewTick[size_t(i)] > staleTicks)
                 cur[size_t(i)].reset();  // no signal -> placeholder
         }
 

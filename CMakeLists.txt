@@ -73,7 +73,7 @@ target_include_directories(CudaDriver SYSTEM INTERFACE ${CUDA_DRIVER_INC})
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
-  libavcodec libavformat libavutil libavfilter libswresample)
+  libavcodec libavformat libavutil libavfilter libswresample libswscale)
 
 add_library(moo_media STATIC
   src/media/CudaCtx.cpp
@@ -129,6 +129,7 @@ if(NDI_FOUND)
   add_library(moo_engine STATIC
     src/engine/Engine.cpp
     src/in/SrtInput.cpp
+    src/in/StillInput.cpp
     src/ndi/NdiFinder.cpp
     src/ndi/NdiReceiver.cpp
     src/out/FileRecorder.cpp

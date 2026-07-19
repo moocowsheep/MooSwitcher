@@ -20,6 +20,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "media/StillImage.h"
+
 namespace moo::ui {
 
 namespace {
@@ -30,7 +32,10 @@ QString shortSourceName(QString ref) {
     else if (ref.startsWith(QStringLiteral("omt://"), Qt::CaseInsensitive))
         ref = QStringLiteral("OMT · ") + ref.mid(6);
     else if (QFileInfo(ref).isAbsolute())
-        ref = QStringLiteral("MEDIA · ") + QFileInfo(ref).fileName();
+        ref = (media::isStillImagePath(ref.toStdString())
+                   ? QStringLiteral("STILL · ")
+                   : QStringLiteral("MEDIA · ")) +
+              QFileInfo(ref).fileName();
     return ref.isEmpty() ? QStringLiteral("NO SOURCE") : ref;
 }
 
@@ -59,7 +64,7 @@ public:
         title->setObjectName(QStringLiteral("sectionTitle"));
         col->addWidget(title);
         auto* hint = new QLabel(QStringLiteral(
-            "Choose a discovered source, enter a URL, or build an ordered media playlist."));
+            "Choose a source, enter a URL, build a video playlist, or load a still image."));
         hint->setObjectName(QStringLiteral("sectionHint"));
         col->addWidget(hint);
 
@@ -81,12 +86,20 @@ public:
         connect(mediaBtn, &QPushButton::clicked, this,
                 [this] { addMedia(); });
         manualRow->addWidget(mediaBtn);
+        auto* stillBtn = new QPushButton(QStringLiteral("ADD STILL"));
+        stillBtn->setObjectName(QStringLiteral("actionButton"));
+        connect(stillBtn, &QPushButton::clicked, this,
+                [this] { addStill(); });
+        manualRow->addWidget(stillBtn);
         col->addLayout(manualRow);
         connect(manual_, &QLineEdit::textEdited, this,
-                [this] { mediaChosen_ = false; });
+                [this] {
+                    mediaChosen_ = false;
+                    stillChosen_ = false;
+                });
 
         auto* playlistLabel = new QLabel(QStringLiteral(
-            "MEDIA PLAYLIST   ·   clips advance top-to-bottom"));
+            "VIDEO PLAYLIST   ·   clips advance top-to-bottom"));
         playlistLabel->setObjectName(QStringLiteral("eyebrow"));
         col->addWidget(playlistLabel);
         playlist_ = new QListWidget;
@@ -174,7 +187,11 @@ public:
         connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
         connect(list_, &QListWidget::itemDoubleClicked, this, &QDialog::accept);
         connect(list_, &QListWidget::itemClicked, this,
-                [this] { mediaChosen_ = false; });
+                [this] {
+                    mediaChosen_ = false;
+                    stillChosen_ = false;
+                    manual_->clear();
+                });
         if (playlist_->count() > 0) playlist_->setCurrentRow(0);
         col->addWidget(buttons);
         resize(620, 590);
@@ -193,6 +210,7 @@ public:
     // -1 = infer from the ref (manual entry); explicit for discovery rows.
     int chosenType() const {
         if (mediaChosen_ && playlist_->count() > 0) return 3;
+        if (stillChosen_) return 4;
         if (!manual_->text().trimmed().isEmpty()) return -1;
         if (auto* item = list_->currentItem())
             return item->data(kTypeRole).toInt();
@@ -297,17 +315,32 @@ private:
 
     void addMedia() {
         const QStringList paths = QFileDialog::getOpenFileNames(
-            this, QStringLiteral("Add media clips"), {},
+            this, QStringLiteral("Add video clips"), {},
             QStringLiteral(
                 "Video files (*.mkv *.mp4 *.mov *.m4v *.ts);;All files (*)"));
         if (paths.isEmpty()) return;
         for (const QString& path : paths)
             addPlaylistItem(media::PlaylistItem{path.toStdString()});
         mediaChosen_ = true;
+        stillChosen_ = false;
         manual_->clear();
         list_->clearSelection();
         sync_->setCurrentIndex(0);
         playlist_->setCurrentRow(playlist_->count() - 1);
+    }
+
+    void addStill() {
+        const QString path = QFileDialog::getOpenFileName(
+            this, QStringLiteral("Load still image"), {},
+            QStringLiteral(
+                "Still images (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff "
+                "*.tga *.exr);;All files (*)"));
+        if (path.isEmpty()) return;
+        manual_->setText(path);
+        mediaChosen_ = false;
+        stillChosen_ = true;
+        list_->clearSelection();
+        sync_->setCurrentIndex(0);
     }
 
     void moveMedia(int direction) {
@@ -343,6 +376,7 @@ private:
     QSpinBox* trimOut_ = nullptr;
     QSpinBox* speed_ = nullptr;
     bool mediaChosen_ = false;
+    bool stillChosen_ = false;
 };
 
 float dbFor(float linear) {

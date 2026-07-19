@@ -59,10 +59,11 @@ public slots:
     void setMasterDelayMs(int ms);
 
     // Source picker: type -1 = infer from the ref (srt://->SRT, omt://->OMT,
-    // anything else = NDI name substring); 0/1/2/3 force Ndi/Srt/Omt/Media
-    // for OMT discovery names, which carry no scheme. syncFrames: -1 off,
-    // 0 measure-only (auto A/V trim), 1..4 buffered. Takes effect at the
-    // next render tick.
+    // anything else = NDI name substring); 0/1/2/3/4 force
+    // Ndi/Srt/Omt/Media/Still for discovery and local-file choices.
+    // syncFrames: -1 off, 0 measure-only (auto A/V trim), 1..4 buffered.
+    // Static stills always force sync off. Takes effect at the next render
+    // tick.
     void replaceInput(int input, QString ref, int syncFrames, int type = -1);
     void replaceMediaPlaylist(
         int input, std::vector<media::PlaylistItem> items, int syncFrames);
@@ -77,7 +78,7 @@ public:
     QStringList ndiSourceNames() const;
     QStringList omtSourceNames() const;  // empty when built without OMT
     QString inputRef(int input) const;
-    // InputSpec::Type as int (0 NDI, 1 SRT, 2 OMT, 3 media).
+    // InputSpec::Type as int (0 NDI, 1 SRT, 2 OMT, 3 media, 4 still).
     int inputType(int input) const;
     IInputSource::MediaState mediaState(int input) const {
         return engine_.inputMediaState(input);

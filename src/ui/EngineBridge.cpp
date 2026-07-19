@@ -3,6 +3,7 @@
 #include <QFileInfo>
 
 #include "core/Stats.h"
+#include "media/StillImage.h"
 
 namespace moo::ui {
 
@@ -73,10 +74,12 @@ void EngineBridge::replaceInput(int input, QString ref, int syncFrames,
                                 int type) {
     const std::string r = ref.toStdString();
     const auto t =
-        type >= 0 && type <= 3 ? InputSpec::Type(type)
+        type >= 0 && type <= 4 ? InputSpec::Type(type)
         : r.rfind("srt://", 0) == 0   ? InputSpec::Type::Srt
         : r.rfind("omt://", 0) == 0   ? InputSpec::Type::Omt
-        : QFileInfo(ref).isFile()      ? InputSpec::Type::Media
+        : QFileInfo(ref).isFile()
+            ? (media::isStillImagePath(r) ? InputSpec::Type::Still
+                                          : InputSpec::Type::Media)
                                       : InputSpec::Type::Ndi;
     engine_.requestInputReplace(input, {t, r, syncFrames});
 }

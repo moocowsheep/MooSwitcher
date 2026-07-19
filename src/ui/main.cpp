@@ -46,6 +46,9 @@ int main(int argc, char** argv) {
         else if (args[i] == QStringLiteral("--media-input") &&
                  i + 1 < args.size())
             addInput(moo::InputSpec::Type::Media, args[++i]);
+        else if (args[i] == QStringLiteral("--still-input") &&
+                 i + 1 < args.size())
+            addInput(moo::InputSpec::Type::Still, args[++i]);
         else if (args[i] == QStringLiteral("--validate"))
             cfg.validation = true;
         else if (args[i] == QStringLiteral("--show") && i + 1 < args.size()) {

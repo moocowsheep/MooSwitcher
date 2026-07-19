@@ -1,14 +1,16 @@
 # Downstream keyers (feature K, v2) — design & implementation notes
 
 Two DSK layers composited over the A/B program mix, keyed from **native
-UYVA alpha inputs** (NDI + OMT). Shipped across K1 (UYVA ingest), K2
-(engine/shader), K3 (GUI/persistence). Bench: `bench-dsk.md`.
+alpha inputs** (NDI/OMT UYVA or local raster stills). Shipped across K1
+(UYVA ingest), K2 (engine/shader), K3 (GUI/persistence), with static
+PNG/WebP-style inputs added by the media layer. Bench: `bench-dsk.md`.
 
 ## Scope decisions (locked with the operator)
 
-- Key sources are **existing inputs carrying UYVA alpha**. No PNG stills,
-  fill+key pairs, or chroma/luma self-keys in this cut (all remain natural
-  extensions: the keyer shader consumes fill RGB + an alpha scalar).
+- Key sources are **existing inputs carrying alpha**. These can be live UYVA
+  sources or local raster stills. No fill+key pairs or chroma/luma self-keys
+  in this cut (both remain natural extensions: the keyer shader consumes fill
+  RGB + an alpha scalar).
 - **2 keyers** (`kDskCount`), DSK2 over DSK1. Each: on/off toggle with an
   auto-fade (per-keyer duration), independent of A/B transitions.
 - **FTB blacks out the keyers** (applied after keying, broadcast
@@ -112,4 +114,4 @@ UYVA alpha inputs** (NDI + OMT). Shipped across K1 (UYVA ingest), K2
   look-ahead pass (single composited program image by design; a second
   composite would be needed).
 - Tie-DSK-to-transition (ATEM-style) not implemented.
-- Keyer sources must be inputs; stills/media player remain v2 candidates.
+- Keyer sources must be inputs; local alpha stills can occupy those inputs.

@@ -15,6 +15,7 @@
 #include "core/MediaClock.h"
 #include "core/Stats.h"
 #include "engine/Engine.h"
+#include "media/StillImage.h"
 
 namespace {
 volatile std::sig_atomic_t g_stop = 0;
@@ -74,6 +75,11 @@ int main(int argc, char** argv) {
                 spec.mediaPlaylist.emplace_back(v);
                 cfg.inputs.push_back(std::move(spec));
                 lastMediaInput = int(cfg.inputs.size()) - 1;
+            }
+        } else if (a == "--still-input") {
+            if (const char* v = next()) {
+                cfg.inputs.push_back({moo::InputSpec::Type::Still, v});
+                lastMediaInput = -1;
             }
         } else if (a == "--media-item") {
             const char* v = next();
@@ -204,6 +210,7 @@ int main(int argc, char** argv) {
             fprintf(stderr,
                     "usage: moo-headless --input NAME [--input NAME ...] "
                     "[--srt-input URL] [--omt-input NAME_OR_URL] "
+                    "[--still-input PATH] "
                     "[--media-input PATH [--media-trim IN_MS[:OUT_MS]] "
                     "[--media-speed RATE] [--media-item PATH "
                     "[--media-trim IN_MS[:OUT_MS]] [--media-speed RATE] ...] "
@@ -280,7 +287,9 @@ int main(int argc, char** argv) {
                     : r.ref.rfind("omt://", 0) == 0
                         ? moo::InputSpec::Type::Omt
                     : std::filesystem::is_regular_file(r.ref)
-                        ? moo::InputSpec::Type::Media
+                        ? (moo::media::isStillImagePath(r.ref)
+                               ? moo::InputSpec::Type::Still
+                               : moo::InputSpec::Type::Media)
                         : moo::InputSpec::Type::Ndi;
                 engine.requestInputReplace(r.idx, {type, r.ref});
             }

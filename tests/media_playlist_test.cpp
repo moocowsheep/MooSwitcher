@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "media/Playlist.h"
+#include "media/StillImage.h"
 
 using namespace moo::media;
 
@@ -57,4 +58,14 @@ TEST_CASE("playlist speed scales source time onto wall time") {
     CHECK(playlistWallDurationNs(item, 1'000'000'000) == 500'000'000);
     item.speedPermille = 4000;
     CHECK(playlistWallDurationNs(item, 1'000'000'000) == 250'000'000);
+}
+
+TEST_CASE("still-image path inference recognizes supported raster formats") {
+    CHECK(isStillImagePath("/show/Logo.PNG"));
+    CHECK(isStillImagePath("lower.third.webp"));
+    CHECK(isStillImagePath("C:\\show\\matte.TIFF"));
+    CHECK(isStillImagePath("plate.exr"));
+    CHECK_FALSE(isStillImagePath("/show/roll-in.mkv"));
+    CHECK_FALSE(isStillImagePath("/show/image"));
+    CHECK_FALSE(isStillImagePath("/show.with.dot/image"));
 }

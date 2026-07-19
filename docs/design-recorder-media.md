@@ -1,6 +1,7 @@
 # Program recorder and media player
 
-Status: IMPLEMENTED (recorder, player, playlist, trim, and speed layers,
+Status: IMPLEMENTED (recorder, player, playlist, trim, speed, and still-image
+layers,
 2026-07-18).
 
 ## Scope
@@ -18,9 +19,11 @@ Status: IMPLEMENTED (recorder, player, playlist, trim, and speed layers,
 - Per-item 0.25×–4.00× playback with pitch-preserving audio tempo.
 - Program recording and media input are available in both GUI and headless
   operation.
+- A local raster still can occupy a normal input slot. It remains on-air until
+  replaced, and non-opaque source alpha is retained for DSK use.
 
-Still images, ISO recording, replay, and clean-feed recording are intentionally
-later layers.
+ISO recording and clean-feed recording remain later layers. Instant replay is
+intentionally outside MooSwitcher's scope.
 
 ## Recorder architecture
 
@@ -74,6 +77,26 @@ restoring a show cues item one at its in point and starts playback. Older
 single-path and pre-speed playlist show files load with `IN=0`, `OUT=END`,
 and `1.00×`.
 
+## Still-image architecture
+
+`StillInput` is separate from clip transport semantics:
+
+- FFmpeg decodes one raster frame on a worker thread;
+- libswscale converts it once to the compositor's limited-range UYVY contract;
+- a non-opaque alpha channel becomes the existing straight, full-resolution
+  UYVA alpha plane used by the DSKs;
+- the CPU-visible upload ring submits once, and the published GPU frame is
+  marked persistent so the live-source stale timeout does not replace it with
+  the no-signal placeholder;
+- odd source widths scale up by one pixel to satisfy packed UYVY's two-pixel
+  macropixel requirement;
+- static inputs have no audio or source cadence, so frame sync is forced off.
+
+The GUI source picker exposes **ADD STILL**. Show files store the dedicated
+`still` input type and path, and headless operation uses `--still-input PATH`.
+PNG, JPEG, WebP, BMP, TIFF, TGA, and EXR paths are recognized; the FFmpeg
+decoder remains the final authority on whether a particular file is readable.
+
 ## Validation
 
 - Unit: playlist policy covers middle-item advance, final-item stop/wrap, and
@@ -102,7 +125,14 @@ and `1.00×`.
   both 4.00× and 0.25×; the 4× source naturally outpaced the 60p upload/render
   sampling (counted, non-blocking input drops), while program rendering again
   had zero skips.
-- Full automated suite: 71/71 passing after speed integration.
+- Still persistence smoke: one transparent 642×360 PNG decoded and uploaded
+  exactly once, remained present through a five-second run (past the
+  live-source two-second stale timeout), and rendered 302 program ticks with
+  zero skips.
+- Still alpha smoke: an RGBA PNG with a fully transparent surround and
+  60%-opaque fill keyed over a separate opaque still; the surround revealed
+  the background and the fill blended correctly, with zero render skips.
+- Full automated suite: 73/73 passing after still-image integration.
 
 ## Known limits
 
@@ -115,6 +145,8 @@ and `1.00×`.
   frame boundaries (typically within one AAC block).
 - Speed changes are item-boundary controls; there is no live rate ramp within
   a playing item.
+- Stills are static single-file inputs rather than playlist items; replace the
+  input or select another still to change the graphic.
 - SRT and recording share the compositor's single NV12 pack buffer. Either
   encoder falling behind can make both encoded outputs skip that frame, but
   program rendering remains unaffected.

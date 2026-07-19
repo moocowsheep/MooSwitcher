@@ -8,8 +8,9 @@ Status: **v1 complete (M0–M6), v2 frame sync landed**. 8K-hardened engine (30-
 tick overruns, 1.5-frame latency, <2 cores full pipeline, NVENC 54%), full audio mixer (A/V
 within ±8 ms on NDI and SRT paths at 1080p and 8K), live source picker (swap NDI/SRT sources
 per input mid-show), show-file persistence (restart restores everything), health banners,
-runtime counters in the GUI, HEVC/AAC program recording, and paced local clip
-playlists with trim, speed, and transport controls. Per-input **frame sync**: re-times a source onto the output tick
+runtime counters in the GUI, HEVC/AAC program recording, paced local clip
+playlists with trim, speed, and transport controls, and static raster inputs
+with native alpha. Per-input **frame sync**: re-times a source onto the output tick
 grid (1–4 frame buffer absorbs bursty delivery, rate slip becomes counted repeats/drops) and
 auto-aligns the input's audio to the re-timed video — the cross-session A/V phase lottery
 collapses to a constant (design + measurements: `docs/design-framesync.md`,
@@ -71,14 +72,19 @@ trim points, speed, and loop mode persist in the show file; playback starts
 from the first clip after an application restart. Headless:
 `--media-input A.mkv --media-trim 500:2500 --media-speed 1.5 --media-item B.mkv`
 (`--media-no-loop` stops at the end; trim values are milliseconds). Still
-images and instant replay are not yet included.
+images use **ADD STILL** in the same source picker, decode and upload once,
+then remain live until that input is replaced. PNG, JPEG, WebP, BMP, TIFF,
+TGA, and EXR are recognized; non-opaque alpha is preserved for direct use as
+a DSK graphic. Still selections persist in the show file. Headless:
+`--still-input sponsor-logo.png`.
 Design and validation notes: `docs/design-recorder-media.md`.
 
-Two downstream keyers composite graphics with **native alpha (NDI/OMT UYVA)** over program —
-point a DSK at an input carrying alpha (CasparCG, OBS with alpha, `moo-testgen --uyva`), and
-toggle it on; it fades over its own duration, independent of transitions, and FTB takes it
-out with everything else. A source without alpha keys fully opaque (a fadeable fullscreen
-overlay). Headless: `--dsk K:SRC --dsk-fade K:TICKS --dsk-toggle-after S:K`. Design:
+Two downstream keyers composite graphics with **native alpha (NDI/OMT UYVA or a local
+raster still)** over program — point a DSK at an input carrying alpha (CasparCG, OBS with
+alpha, `moo-testgen --uyva`, or a transparent PNG/WebP still), and toggle it on; it fades
+over its own duration, independent of transitions, and FTB takes it out with everything
+else. A source without alpha keys fully opaque (a fadeable fullscreen overlay). Headless:
+`--dsk K:SRC --dsk-fade K:TICKS --dsk-toggle-after S:K`. Design:
 `docs/design-dsk.md`; measurements: `docs/bench-dsk.md` (an 8K UYVA key over an 8K program
 holds full rate; keyers-off cost is nil).
 
@@ -86,7 +92,7 @@ holds full rate; keyers-off cost is nil).
 
 Requires: gcc 14+/clang, CMake 3.25+, Ninja, the NDI SDK 6, and FFmpeg
 development libraries (`libavcodec`, `libavformat`, `libavutil`, `libavfilter`,
-and `libswresample`).
+`libswresample`, and `libswscale`).
 
 ```sh
 # NDI SDK (unprivileged): download + extract into third_party/ndi

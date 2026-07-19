@@ -13,8 +13,8 @@ namespace audio {
 class InputChannel;
 }
 
-// A switcher input: publishes latest-frame GpuFrames from some transport
-// (NDI receiver, SRT/NVDEC decoder, later stills/players).
+// A switcher input: publishes latest-frame GpuFrames from a live transport,
+// local clip decoder, or persistent still-image loader.
 class IInputSource {
 public:
     using FramePtr = std::shared_ptr<const gpu::GpuFrame>;
@@ -70,6 +70,10 @@ public:
 
     virtual Status status() const = 0;
     virtual void setTally(bool /*onProgram*/, bool /*onPreview*/) {}
+    // Static sources publish once and retain that frame indefinitely; the
+    // render loop must not replace it with the no-signal placeholder after
+    // the live-source stale timeout.
+    virtual bool frameIsPersistent() const { return false; }
     virtual MediaState mediaState() const { return {}; }
     virtual void setMediaPlaying(bool /*playing*/) {}
     virtual void setMediaLoop(bool /*loop*/) {}

@@ -31,8 +31,8 @@ class FileRecorder;
 class SrtOutput;
 
 struct InputSpec {
-    enum class Type { Ndi, Srt, Omt, Media } type = Type::Ndi;
-    std::string ref;  // NDI name, SRT/OMT URL, or local media path
+    enum class Type { Ndi, Srt, Omt, Media, Still } type = Type::Ndi;
+    std::string ref;  // NDI name, SRT/OMT URL, local video, or still image
     // Frame sync (docs/design-framesync.md): -1 = off (v1 latest-frame
     // behavior), 0 = measure-only (auto A/V trim, no added latency),
     // 1..4 = buffered re-timing by that many source frames.

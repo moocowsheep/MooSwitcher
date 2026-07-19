@@ -120,6 +120,26 @@ TEST_CASE("legacy single-clip show file becomes a one-item playlist") {
           std::vector<media::PlaylistItem>{{"/shows/legacy.mkv"}});
 }
 
+TEST_CASE("show file preserves still-image inputs") {
+    QTemporaryDir temporary;
+    REQUIRE(temporary.isValid());
+
+    ShowFile file(temporary.filePath(QStringLiteral("show.ini")));
+    ShowFile::State saved;
+    InputSpec still{InputSpec::Type::Still, "/shows/sponsor-logo.png"};
+    still.syncFrames = -1;
+    saved.cfg.inputs = {still};
+    file.save(saved);
+
+    ShowFile::State restored;
+    REQUIRE(file.load(restored));
+    REQUIRE(restored.cfg.inputs.size() == 1);
+    CHECK(restored.cfg.inputs[0].type == InputSpec::Type::Still);
+    CHECK(restored.cfg.inputs[0].ref == "/shows/sponsor-logo.png");
+    CHECK(restored.cfg.inputs[0].syncFrames == -1);
+    CHECK(restored.cfg.inputs[0].mediaPlaylist.empty());
+}
+
 TEST_CASE("output format badge tracks and saves pending selections") {
     (void)application();
 

@@ -77,6 +77,8 @@ bool ShowFile::load(State& st) const {
                     : type == QStringLiteral("omt") ? InputSpec::Type::Omt
                     : type == QStringLiteral("media")
                         ? InputSpec::Type::Media
+                    : type == QStringLiteral("still")
+                        ? InputSpec::Type::Still
                                                     : InputSpec::Type::Ndi;
         spec.ref = s.value("ref").toString().toStdString();
         // Absent in v1 show files -> stays off (-1).
@@ -174,6 +176,7 @@ void ShowFile::save(const State& st) const {
             spec.type == InputSpec::Type::Srt     ? QStringLiteral("srt")
             : spec.type == InputSpec::Type::Omt   ? QStringLiteral("omt")
             : spec.type == InputSpec::Type::Media ? QStringLiteral("media")
+            : spec.type == InputSpec::Type::Still ? QStringLiteral("still")
                                                   : QStringLiteral("ndi"));
         s.setValue("ref", QString::fromStdString(spec.ref));
         s.setValue("framesync", spec.syncFrames);
