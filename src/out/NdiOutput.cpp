@@ -7,8 +7,10 @@
 namespace moo {
 
 NdiOutput::NdiOutput(std::string name, gpu::Compositor& comp,
-                     gpu::Timeline& readbackTL)
-    : name_(std::move(name)), comp_(comp), readbackTL_(readbackTL) {
+                     gpu::Timeline& readbackTL,
+                     gpu::Compositor::Feed feed)
+    : name_(std::move(name)), comp_(comp), readbackTL_(readbackTL),
+      feed_(feed) {
     NDIlib_send_create_t desc{};
     desc.p_ndi_name = name_.c_str();
     desc.clock_video = false;  // the render clock paces us
@@ -52,8 +54,11 @@ void NdiOutput::sendAudio(const float* lr, int frames, int64_t /*firstSample*/) 
 }
 
 void NdiOutput::run(std::stop_token st) {
-    auto& sentCtr = Stats::counter("out.ndi.sent");
-    auto& skipCtr = Stats::counter("out.ndi.droppedToLatest");
+    const std::string prefix =
+        feed_ == gpu::Compositor::Feed::Clean ? "out.ndi.clean"
+                                              : "out.ndi";
+    auto& sentCtr = Stats::counter(prefix + ".sent");
+    auto& skipCtr = Stats::counter(prefix + ".droppedToLatest");
 
     const auto& show = comp_.showFormat();
     NDIlib_video_frame_v2_t vf{};
@@ -79,19 +84,21 @@ void NdiOutput::run(std::stop_token st) {
         // Find the slot stamped with `newest` (engine stamps before submit).
         int slot = -1;
         for (int s = 0; s < gpu::Compositor::kPackSlots; ++s)
-            if (comp_.packStamp(s).load(std::memory_order_acquire) == newest) {
+            if (comp_.packStamp(s, feed_).load(std::memory_order_acquire) ==
+                newest) {
                 slot = s;
                 break;
             }
         lastSent = newest;
         if (slot < 0) continue;  // engine skipped packing that tick
 
-        comp_.packPinned(slot).store(true, std::memory_order_release);
-        vf.p_data = const_cast<uint8_t*>(comp_.packPtr(slot));
+        comp_.packPinned(slot, feed_).store(true, std::memory_order_release);
+        vf.p_data = const_cast<uint8_t*>(comp_.packPtr(slot, feed_));
         NDIlib_send_send_video_async_v2(sender_, &vf);
         // The PREVIOUS buffer is released by this call.
         if (prevSlot >= 0 && prevSlot != slot)
-            comp_.packPinned(prevSlot).store(false, std::memory_order_release);
+            comp_.packPinned(prevSlot, feed_)
+                .store(false, std::memory_order_release);
         prevSlot = slot;
         sent_.fetch_add(1, std::memory_order_relaxed);
         sentCtr.add();

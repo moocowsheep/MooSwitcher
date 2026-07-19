@@ -15,6 +15,8 @@ PNG/WebP-style inputs added by the media layer. Bench: `bench-dsk.md`.
   auto-fade (per-keyer duration), independent of A/B transitions.
 - **FTB blacks out the keyers** (applied after keying, broadcast
   convention).
+- The clean-feed branch taps the A/B mix before both keyers, then applies FTB;
+  it is documented in `design-clean-feed.md`.
 - A keyed source with **no alpha renders fully opaque** — a fadeable
   fullscreen overlay. Documented behavior, not an error.
 

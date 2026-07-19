@@ -42,6 +42,9 @@ Engine::Engine() = default;
 Engine::~Engine() { stop(); }
 
 int64_t Engine::ndiOutFrames() const { return ndiOut_ ? ndiOut_->framesSent() : 0; }
+int64_t Engine::cleanNdiOutFrames() const {
+    return cleanNdiOut_ ? cleanNdiOut_->framesSent() : 0;
+}
 int64_t Engine::srtFramesEncoded() const {
     return srtOut_ ? srtOut_->framesEncoded() : 0;
 }
@@ -100,12 +103,27 @@ std::vector<media::PlaylistItem> Engine::inputMediaPlaylist(int i) const {
 }
 
 void Engine::requestRecording(std::string path) {
+    requestRecordingImpl(std::move(path), false);
+}
+
+void Engine::requestCleanRecording(std::string path) {
+    requestRecordingImpl(std::move(path), true);
+}
+
+void Engine::requestRecordingImpl(std::string path, bool clean) {
+    auto& pending =
+        clean ? cleanRecordingPending_ : recordingPending_;
+    auto& error = clean ? cleanRecordingError_ : recordingError_;
+    auto& recorderSlot = clean ? cleanRecorder_ : recorder_;
+    auto& generation =
+        clean ? cleanRecorderGeneration_ : recorderGeneration_;
     {
         std::lock_guard lock(recordM_);
-        requestedRecordingPath_ = path;
+        (clean ? requestedCleanRecordingPath_ : requestedRecordingPath_) =
+            path;
     }
-    recordingError_.store(false, std::memory_order_relaxed);
-    recordingPending_.store(true, std::memory_order_release);
+    error.store(false, std::memory_order_relaxed);
+    pending.store(true, std::memory_order_release);
 
     std::shared_ptr<FileRecorder> next;
     if (!path.empty()) {
@@ -114,32 +132,51 @@ void Engine::requestRecording(std::string path) {
         } else {
             next = std::make_shared<FileRecorder>(
                 cuda_, *comp_, renderTL_, path, cfg_.show, cfg_.audio,
-                clock_.currentTick(), cfg_.recordBitrateKbps);
+                clock_.currentTick(), cfg_.recordBitrateKbps,
+                clean ? gpu::Compositor::Feed::Clean
+                      : gpu::Compositor::Feed::Program);
             if (!next->ok()) next.reset();
         }
     }
     const bool failed = !path.empty() && !next;
     auto previous =
-        recorder_.exchange(std::move(next), std::memory_order_acq_rel);
-    recorderGeneration_.fetch_add(1, std::memory_order_release);
+        recorderSlot.exchange(std::move(next), std::memory_order_acq_rel);
+    generation.fetch_add(1, std::memory_order_release);
     while (previous && previous.use_count() > 1)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     previous.reset();
-    recordingError_.store(failed, std::memory_order_relaxed);
-    recordingPending_.store(false, std::memory_order_release);
+    error.store(failed, std::memory_order_relaxed);
+    pending.store(false, std::memory_order_release);
 }
 
 Engine::RecordingState Engine::recordingState() const {
+    return recordingStateImpl(false);
+}
+
+Engine::RecordingState Engine::cleanRecordingState() const {
+    return recordingStateImpl(true);
+}
+
+Engine::RecordingState Engine::recordingStateImpl(bool clean) const {
     RecordingState state;
-    const auto recorder = recorder_.load(std::memory_order_acquire);
+    const auto recorder =
+        (clean ? cleanRecorder_ : recorder_).load(std::memory_order_acquire);
     state.active = recorder && recorder->ok();
-    state.pending = recordingPending_.load(std::memory_order_acquire);
-    state.error = recordingError_.load(std::memory_order_relaxed) ||
+    state.pending =
+        (clean ? cleanRecordingPending_ : recordingPending_)
+            .load(std::memory_order_acquire);
+    state.error =
+        (clean ? cleanRecordingError_ : recordingError_)
+            .load(std::memory_order_relaxed) ||
                   (recorder && recorder->failed());
     state.frames = recorder ? recorder->framesEncoded() : 0;
     {
         std::lock_guard lock(recordM_);
-        state.path = state.active ? recorder->path() : requestedRecordingPath_;
+        state.path =
+            state.active
+                ? recorder->path()
+                : (clean ? requestedCleanRecordingPath_
+                         : requestedRecordingPath_);
     }
     return state;
 }
@@ -219,6 +256,10 @@ bool Engine::start(const EngineConfig& cfg) {
     }
     if (cfg_.ndiOut)
         ndiOut_ = std::make_unique<NdiOutput>(cfg_.ndiOutName, *comp_, readbackTL_);
+    if (cfg_.cleanNdiOut)
+        cleanNdiOut_ = std::make_unique<NdiOutput>(
+            cfg_.cleanNdiOutName, *comp_, readbackTL_,
+            gpu::Compositor::Feed::Clean);
 
     if (!cfg_.srtUrl.empty()) {
         srtOut_ = std::make_unique<SrtOutput>(
@@ -245,6 +286,11 @@ bool Engine::start(const EngineConfig& cfg) {
                 [out = ndiOut_.get()](const float* lr, int frames, int64_t s0) {
                     out->sendAudio(lr, frames, s0);
                 });
+        if (cleanNdiOut_)
+            audio_->addSink([out = cleanNdiOut_.get()](
+                                const float* lr, int frames, int64_t s0) {
+                out->sendAudio(lr, frames, s0);
+            });
         if (srtOut_)
             audio_->addSink(
                 [out = srtOut_.get()](const float* lr, int frames, int64_t s0) {
@@ -253,6 +299,9 @@ bool Engine::start(const EngineConfig& cfg) {
         audio_->addSink([this](const float* lr, int frames, int64_t s0) {
             const auto recorder = recorder_.load(std::memory_order_acquire);
             if (recorder) recorder->pushAudio(lr, frames, s0);
+            const auto clean =
+                cleanRecorder_.load(std::memory_order_acquire);
+            if (clean) clean->pushAudio(lr, frames, s0);
         });
     }
 
@@ -263,10 +312,12 @@ bool Engine::start(const EngineConfig& cfg) {
     if (audio_) audio_->start(clock_.originNs());
     renderThread_ = std::jthread([this](std::stop_token st) { renderLoop(st); });
     started_ = true;
-    MOO_LOGI("engine started: show %dx%d @ %lld/%lld, %zu inputs, mv %dx%d, ndiOut=%s",
+    MOO_LOGI("engine started: show %dx%d @ %lld/%lld, %zu inputs, mv %dx%d, "
+             "ndiOut=%s, cleanNdi=%s",
              cfg_.show.width, cfg_.show.height, (long long)cfg_.show.fpsN,
              (long long)cfg_.show.fpsD, inputs_.size(), comp_->mvWidth(),
-             comp_->mvHeight(), cfg_.ndiOut ? cfg_.ndiOutName.c_str() : "off");
+             comp_->mvHeight(), cfg_.ndiOut ? cfg_.ndiOutName.c_str() : "off",
+             cfg_.cleanNdiOut ? cfg_.cleanNdiOutName.c_str() : "off");
     return true;
 }
 
@@ -383,13 +434,19 @@ void Engine::stop() {
     // receive timeout or two; leaving the recorder attached to the audio
     // mixer during that interval would append seconds of audio-only tail.
     auto recorder = recorder_.exchange({}, std::memory_order_acq_rel);
+    auto cleanRecorder =
+        cleanRecorder_.exchange({}, std::memory_order_acq_rel);
     while (recorder && recorder.use_count() > 1)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    while (cleanRecorder && cleanRecorder.use_count() > 1)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     recorder.reset();
+    cleanRecorder.reset();
     inputs_.clear();     // capture threads stop writing the audio rings
     finder_.reset();
     audio_.reset();      // mixer stops; no more sink calls into the outputs
     srtOut_.reset();     // drains encoder, releases CUDA imports (device alive)
+    cleanNdiOut_.reset();
     ndiOut_.reset();     // stops sender before its buffers go away
     if (renderTL_.lastReserved())
         renderTL_.waitCompleted(renderTL_.lastReserved(), 2'000'000'000);
@@ -439,6 +496,8 @@ void Engine::renderLoop(std::stop_token st) {
     auto& skipCtr = Stats::counter("render.skips");
     auto& lateWaitCtr = Stats::counter("render.gpuLateWaits");
     auto& packSkipCtr = Stats::counter("out.ndi.packSlotBusy");
+    auto& cleanPackSkipCtr =
+        Stats::counter("out.ndi.clean.packSlotBusy");
     std::vector<Stats::Counter*> repeatCtr(static_cast<size_t>(N));
     std::vector<Stats::Counter*> burstCtr(static_cast<size_t>(N));
     std::vector<Stats::Counter*> lateCtr(static_cast<size_t>(N));
@@ -496,6 +555,7 @@ void Engine::renderLoop(std::stop_token st) {
 
     uint64_t lastTallyKey = ~0ull;
     uint64_t seenRecorderGeneration = 0;
+    uint64_t seenCleanRecorderGeneration = 0;
 
     // The clock was started in start() (audio shares the origin); the first
     // few ticks may already be past, which sleepUntilTick treats as "go now".
@@ -831,19 +891,31 @@ void Engine::renderLoop(std::stop_token st) {
         retention_[fif].clear();
 
         // -- pick a pack slot for the NDI output (skip if the ring is busy) --
-        int packSlot = -1;
-        if (ndiOut_) {
+        const auto pickPackSlot = [&](NdiOutput* output,
+                                      gpu::Compositor::Feed feed,
+                                      Stats::Counter& busyCounter) {
+            if (!output) return -1;
             const uint64_t rbDone = readbackTL_.completed();
             for (int s = 0; s < gpu::Compositor::kPackSlots; ++s) {
-                if (comp_->packPinned(s).load(std::memory_order_acquire)) continue;
-                if (comp_->packStamp(s).load(std::memory_order_acquire) > rbDone)
+                if (comp_->packPinned(s, feed).load(
+                        std::memory_order_acquire))
+                    continue;
+                if (comp_->packStamp(s, feed).load(
+                        std::memory_order_acquire) > rbDone)
                     continue;  // DMA still in flight
-                packSlot = s;
-                break;
+                return s;
             }
-            if (packSlot < 0) packSkipCtr.add();
-        }
+            busyCounter.add();
+            return -1;
+        };
+        const int packSlot =
+            pickPackSlot(ndiOut_.get(), gpu::Compositor::Feed::Program,
+                         packSkipCtr);
+        const int cleanPackSlot =
+            pickPackSlot(cleanNdiOut_.get(), gpu::Compositor::Feed::Clean,
+                         cleanPackSkipCtr);
         tj.packProgram = packSlot >= 0;
+        tj.packClean = cleanPackSlot >= 0;
 
         // -- Shared NV12 pack for SRT and recording: only when every active
         //    consumer has released this FIF's buffer. A slow consumer costs
@@ -854,6 +926,14 @@ void Engine::renderLoop(std::stop_token st) {
         if (recorderGeneration != seenRecorderGeneration) {
             recordNvPushed_.fill(0);
             seenRecorderGeneration = recorderGeneration;
+        }
+        const auto cleanRecorder =
+            cleanRecorder_.load(std::memory_order_acquire);
+        const uint64_t cleanRecorderGeneration =
+            cleanRecorderGeneration_.load(std::memory_order_acquire);
+        if (cleanRecorderGeneration != seenCleanRecorderGeneration) {
+            cleanRecordNvPushed_.fill(0);
+            seenCleanRecorderGeneration = cleanRecorderGeneration;
         }
         bool doNv = srtOut_ || recorder;
         if (srtOut_ &&
@@ -867,6 +947,14 @@ void Engine::renderLoop(std::stop_token st) {
             Stats::counter("record.fifBusySkips").add();
         }
         tj.packNv12 = doNv;
+        bool doCleanNv = bool(cleanRecorder);
+        if (cleanRecorder &&
+            cleanRecorder->copiedValue(fif) <
+                cleanRecordNvPushed_[fif]) {
+            doCleanNv = false;
+            Stats::counter("cleanRecord.fifBusySkips").add();
+        }
+        tj.packCleanNv12 = doCleanNv;
 
         const int rbSlot = int(value % gpu::Compositor::kReadbackSlots);
         rbStamp_[rbSlot].store(value, std::memory_order_release);
@@ -908,14 +996,30 @@ void Engine::renderLoop(std::stop_token st) {
             srtNvPushed_[fif] = value;
         if (doNv && recorder && recorder->push({value, n, fif}))
             recordNvPushed_[fif] = value;
+        if (doCleanNv && cleanRecorder &&
+            cleanRecorder->push({value, n, fif}))
+            cleanRecordNvPushed_[fif] = value;
 
         // -- pack readback on the down queue (chained on this render) --
-        if (packSlot >= 0) {
-            comp_->packStamp(packSlot).store(value, std::memory_order_release);
+        if (packSlot >= 0 || cleanPackSlot >= 0) {
+            if (packSlot >= 0)
+                comp_->packStamp(packSlot, gpu::Compositor::Feed::Program)
+                    .store(value, std::memory_order_release);
+            if (cleanPackSlot >= 0)
+                comp_->packStamp(cleanPackSlot,
+                                 gpu::Compositor::Feed::Clean)
+                    .store(value, std::memory_order_release);
             VkCommandBuffer dcmd = downBufs_[fif];
             vkResetCommandBuffer(dcmd, 0);
             vkBeginCommandBuffer(dcmd, &bi);
-            comp_->recordDownCopy(dcmd, fif, packSlot);
+            if (packSlot >= 0)
+                comp_->recordDownCopy(
+                    dcmd, fif, packSlot,
+                    gpu::Compositor::Feed::Program);
+            if (cleanPackSlot >= 0)
+                comp_->recordDownCopy(
+                    dcmd, fif, cleanPackSlot,
+                    gpu::Compositor::Feed::Clean);
             vkEndCommandBuffer(dcmd);
 
             const VkSemaphoreSubmitInfo dwait = gpu::VkEngine::timelineWait(

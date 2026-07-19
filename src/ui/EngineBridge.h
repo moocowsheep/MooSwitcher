@@ -50,6 +50,8 @@ public slots:
     }
     void startRecording(QString path);
     void stopRecording() { engine_.requestRecording({}); }
+    void startCleanRecording(QString path);
+    void stopCleanRecording() { engine_.requestCleanRecording({}); }
 
     // Audio mixer controls: straight to the mixer atomics (thread-safe).
     void setAudioGain(int input, float linearGain);
@@ -88,6 +90,9 @@ public:
     }
     Engine::RecordingState recordingState() const {
         return engine_.recordingState();
+    }
+    Engine::RecordingState cleanRecordingState() const {
+        return engine_.cleanRecordingState();
     }
     int inputSyncFrames(int input) const { return engine_.inputSyncFrames(input); }
     int audioAutoTrimMs(int input) const;  // applied frame-sync trim readout

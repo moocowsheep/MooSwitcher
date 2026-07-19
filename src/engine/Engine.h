@@ -55,6 +55,8 @@ struct EngineConfig {
     bool validation = false;
     bool ndiOut = true;
     std::string ndiOutName = "MooSwitcher PGM";
+    bool cleanNdiOut = false;
+    std::string cleanNdiOutName = "MooSwitcher CLEAN";
     std::string srtUrl;      // empty = SRT output off
     int srtBitrateKbps = 0;  // 0 = auto
     int recordBitrateKbps = 0;  // 0 = auto; independent of SRT output
@@ -104,7 +106,9 @@ public:
     // Empty path stops recording. Encoder construction and finalization run
     // on the requesting thread; render/audio consumers switch atomically.
     void requestRecording(std::string path);
+    void requestCleanRecording(std::string path);
     RecordingState recordingState() const;
+    RecordingState cleanRecordingState() const;
 
     bool copyMultiview(std::vector<uint8_t>& out, uint64_t& lastSeq, int& w, int& h);
 
@@ -134,6 +138,7 @@ public:
     int64_t renderedTicks() const { return ticks_.load(std::memory_order_relaxed); }
     int64_t skippedTicks() const { return skips_.load(std::memory_order_relaxed); }
     int64_t ndiOutFrames() const;
+    int64_t cleanNdiOutFrames() const;
     int64_t srtFramesEncoded() const;
     bool srtConnected() const;
     bool srtConfigured() const { return srtOut_ != nullptr; }
@@ -141,6 +146,8 @@ public:
 
 private:
     void renderLoop(std::stop_token st);
+    void requestRecordingImpl(std::string path, bool clean);
+    RecordingState recordingStateImpl(bool clean) const;
     bool createPlaceholder();
     bool buildLabelAtlas();
 
@@ -150,14 +157,18 @@ private:
     std::unique_ptr<NdiFinder> finder_;
     std::vector<std::unique_ptr<IInputSource>> inputs_;
     std::unique_ptr<NdiOutput> ndiOut_;
+    std::unique_ptr<NdiOutput> cleanNdiOut_;
     media::CudaCtx cuda_;
     std::unique_ptr<SrtOutput> srtOut_;
     // Atomic shared ownership lets the audio and render threads take a
     // non-blocking snapshot while start/stop swaps the active recorder.
     std::atomic<std::shared_ptr<FileRecorder>> recorder_;
+    std::atomic<std::shared_ptr<FileRecorder>> cleanRecorder_;
     std::unique_ptr<audio::AudioEngine> audio_;
     std::array<uint64_t, gpu::Compositor::kFramesInFlight> srtNvPushed_{};
     std::array<uint64_t, gpu::Compositor::kFramesInFlight> recordNvPushed_{};
+    std::array<uint64_t, gpu::Compositor::kFramesInFlight>
+        cleanRecordNvPushed_{};
 
     std::shared_ptr<gpu::UploadRing> placeholderRing_;
     std::shared_ptr<const gpu::GpuFrame> placeholder_;
@@ -190,9 +201,13 @@ private:
 
     mutable std::mutex recordM_;
     std::string requestedRecordingPath_;
+    std::string requestedCleanRecordingPath_;
     std::atomic<bool> recordingPending_{false};
     std::atomic<bool> recordingError_{false};
     std::atomic<uint64_t> recorderGeneration_{0};
+    std::atomic<bool> cleanRecordingPending_{false};
+    std::atomic<bool> cleanRecordingError_{false};
+    std::atomic<uint64_t> cleanRecorderGeneration_{0};
 
     std::jthread renderThread_;
     std::atomic<bool> started_{false};

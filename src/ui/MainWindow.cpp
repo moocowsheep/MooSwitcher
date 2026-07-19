@@ -519,6 +519,47 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
         setVisualState(recordState_, "state", "pending");
     });
 
+    cleanRecordBtn_ = new QPushButton(QStringLiteral("●  CLEAN REC"));
+    cleanRecordBtn_->setObjectName(QStringLiteral("recordButton"));
+    cleanRecordBtn_->setCheckable(true);
+    cleanRecordBtn_->setToolTip(QStringLiteral(
+        "Record the switched program without downstream key graphics"));
+    topRow->addWidget(cleanRecordBtn_);
+    cleanRecordState_ = new QLabel(QStringLiteral("IDLE"));
+    cleanRecordState_->setObjectName(QStringLiteral("recordState"));
+    cleanRecordState_->setProperty("state", "idle");
+    topRow->addWidget(cleanRecordState_);
+    connect(cleanRecordBtn_, &QPushButton::clicked, this,
+            [this](bool checked) {
+        if (!checked) {
+            bridge_.stopCleanRecording();
+            cleanRecordState_->setText(QStringLiteral("STOPPING…"));
+            setVisualState(cleanRecordState_, "state", "pending");
+            return;
+        }
+
+        QString directory =
+            QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+        if (directory.isEmpty()) directory = QDir::homePath();
+        const QString suggested = QDir(directory).filePath(
+            QStringLiteral("MooSwitcher-Clean-%1.mkv")
+                .arg(QDateTime::currentDateTime().toString(
+                    QStringLiteral("yyyyMMdd-HHmmss"))));
+        const QString path = QFileDialog::getSaveFileName(
+            this, QStringLiteral("Record clean feed"), suggested,
+            QStringLiteral("Matroska video (*.mkv)"));
+        if (path.isEmpty()) {
+            cleanRecordBtn_->setChecked(false);
+            return;
+        }
+        bridge_.startCleanRecording(
+            path.endsWith(QStringLiteral(".mkv"), Qt::CaseInsensitive)
+                ? path
+                : path + QStringLiteral(".mkv"));
+        cleanRecordState_->setText(QStringLiteral("STARTING…"));
+        setVisualState(cleanRecordState_, "state", "pending");
+    });
+
     healthBadge_ = new QLabel(QStringLiteral("●  ENGINE ONLINE"));
     healthBadge_->setObjectName(QStringLiteral("healthBadge"));
     healthBadge_->setProperty("state", "good");
@@ -1135,28 +1176,34 @@ void MainWindow::refreshMediaControls() {
 
 void MainWindow::refreshRecordingState() {
     const auto state = bridge_.recordingState();
-    if (state.pending) return;  // retain STARTING/STOPPING feedback
+    const auto cleanState = bridge_.cleanRecordingState();
+    const auto refresh = [](const Engine::RecordingState& current,
+                            QPushButton* button, QLabel* label,
+                            const QString& idleText) {
+        if (current.pending) return;  // retain STARTING/STOPPING feedback
+        button->blockSignals(true);
+        button->setChecked(current.active);
+        button->setText(current.active ? QStringLiteral("■  STOP")
+                                       : idleText);
+        button->blockSignals(false);
 
-    recordBtn_->blockSignals(true);
-    recordBtn_->setChecked(state.active);
-    recordBtn_->setText(state.active ? QStringLiteral("■  STOP")
-                                     : QStringLiteral("●  RECORD"));
-    recordBtn_->blockSignals(false);
-
-    if (state.error) {
-        recordState_->setText(QStringLiteral("RECORD ERROR"));
-        recordState_->setToolTip(QString::fromStdString(state.path));
-        setVisualState(recordState_, "state", "error");
-    } else if (state.active) {
-        recordState_->setText(
-            QStringLiteral("REC  %1").arg(state.frames));
-        recordState_->setToolTip(QString::fromStdString(state.path));
-        setVisualState(recordState_, "state", "recording");
-    } else {
-        recordState_->setText(QStringLiteral("IDLE"));
-        recordState_->setToolTip({});
-        setVisualState(recordState_, "state", "idle");
-    }
+        if (current.error) {
+            label->setText(QStringLiteral("RECORD ERROR"));
+            label->setToolTip(QString::fromStdString(current.path));
+            setVisualState(label, "state", "error");
+        } else if (current.active) {
+            label->setText(QStringLiteral("REC  %1").arg(current.frames));
+            label->setToolTip(QString::fromStdString(current.path));
+            setVisualState(label, "state", "recording");
+        } else {
+            label->setText(QStringLiteral("IDLE"));
+            label->setToolTip({});
+            setVisualState(label, "state", "idle");
+        }
+    };
+    refresh(state, recordBtn_, recordState_, QStringLiteral("●  RECORD"));
+    refresh(cleanState, cleanRecordBtn_, cleanRecordState_,
+            QStringLiteral("●  CLEAN REC"));
 }
 
 void MainWindow::refreshBusReadouts() {

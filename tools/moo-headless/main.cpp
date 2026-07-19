@@ -30,8 +30,11 @@ int main(int argc, char** argv) {
     bool scriptedCuts = false;
     bool scriptedAutos = false;
     std::string recordPath;
+    std::string cleanRecordPath;
     double recordStopAfter = -1;
+    double cleanRecordStopAfter = -1;
     bool recordStopped = false;
+    bool cleanRecordStopped = false;
     int lastMediaInput = -1;  // --media-item appends to this playlist
     std::vector<std::pair<int, int>> inputDelays;  // {input, ms} audio trims
     struct Replace {
@@ -149,6 +152,11 @@ int main(int argc, char** argv) {
             cfg.ndiOut = false;
         } else if (a == "--ndi-out-name") {
             if (const char* v = next()) cfg.ndiOutName = v;
+        } else if (a == "--clean-ndi-out") {
+            if (const char* v = next()) {
+                cfg.cleanNdiOut = true;
+                cfg.cleanNdiOutName = v;
+            }
         } else if (a == "--srt-out") {
             if (const char* v = next()) cfg.srtUrl = v;
         } else if (a == "--srt-bitrate") {
@@ -156,12 +164,17 @@ int main(int argc, char** argv) {
             if (v) cfg.srtBitrateKbps = atoi(v);
         } else if (a == "--record") {
             if (const char* v = next()) recordPath = v;
+        } else if (a == "--clean-record") {
+            if (const char* v = next()) cleanRecordPath = v;
         } else if (a == "--record-bitrate") {
             const char* v = next();
             if (v) cfg.recordBitrateKbps = atoi(v);
         } else if (a == "--record-stop-after") {
             const char* v = next();
             if (v) recordStopAfter = atof(v);
+        } else if (a == "--clean-record-stop-after") {
+            const char* v = next();
+            if (v) cleanRecordStopAfter = atof(v);
         } else if (a == "--no-audio") {
             cfg.audio = false;
         } else if (a == "--audio-delay") {
@@ -215,8 +228,10 @@ int main(int argc, char** argv) {
                     "[--media-speed RATE] [--media-item PATH "
                     "[--media-trim IN_MS[:OUT_MS]] [--media-speed RATE] ...] "
                     "[--media-no-loop]] "
-                    "[--record PATH.mkv] "
+                    "[--record PATH.mkv] [--clean-record PATH.mkv] "
                     "[--record-bitrate KBPS] [--record-stop-after S] "
+                    "[--clean-record-stop-after S] "
+                    "[--clean-ndi-out NAME] "
                     "[--show WxH] [--duration S] [--dump-dir D] "
                     "[--dump-every S] [--cuts] [--no-audio] "
                     "[--audio-delay MS] [--framesync IDX[:FRAMES]] "
@@ -244,6 +259,8 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (!recordPath.empty()) engine.requestRecording(recordPath);
+    if (!cleanRecordPath.empty())
+        engine.requestCleanRecording(cleanRecordPath);
     if (auto* aud = engine.audio())
         for (auto [idx, ms] : inputDelays)
             if (idx >= 0 && idx < aud->inputCount())
@@ -273,6 +290,11 @@ int main(int argc, char** argv) {
             now >= t0 + int64_t(recordStopAfter * 1e9)) {
             recordStopped = true;
             engine.requestRecording({});
+        }
+        if (!cleanRecordStopped && cleanRecordStopAfter >= 0 &&
+            now >= t0 + int64_t(cleanRecordStopAfter * 1e9)) {
+            cleanRecordStopped = true;
+            engine.requestCleanRecording({});
         }
 
         if (scriptedCuts && now >= nextCutNs) {
@@ -334,6 +356,16 @@ int main(int argc, char** argv) {
                                     : rec.active ? "on"
                                                  : "starting") +
                         " f=" + std::to_string(rec.frames) + "]";
+            if (const auto rec = engine.cleanRecordingState();
+                rec.active || rec.pending || rec.error)
+                line += "  cleanRec[" +
+                        std::string(rec.error   ? "error"
+                                    : rec.active ? "on"
+                                                 : "starting") +
+                        " f=" + std::to_string(rec.frames) + "]";
+            if (engine.cleanNdiOutFrames())
+                line += "  cleanNdi[f=" +
+                        std::to_string(engine.cleanNdiOutFrames()) + "]";
             for (int i = 0; i < engine.inputCount(); ++i) {
                 const auto s = engine.inputStatus(i);
                 line += "  in" + std::to_string(i) + "[" +

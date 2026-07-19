@@ -316,3 +316,104 @@ TEST_CASE("DSK keying: straight, premult, opaque fallback, FTB over keyers") {
     vkDestroyCommandPool(eng.device(), pool, nullptr);
     eng.destroyTimeline(tl);
 }
+
+TEST_CASE("clean feed pack excludes DSK graphics") {
+    GpuFixture fx;
+    if (!fx.ok) SKIP("no Vulkan device");
+    auto& eng = fx.eng;
+
+    VideoFormatDesc d;
+    d.width = 64;
+    d.height = 36;
+    d.colorimetry = Colorimetry::BT709;
+
+    auto makeFrame = [&](uint8_t y, uint8_t u, uint8_t v, bool alpha) {
+        VideoFormatDesc fd = d;
+        if (alpha) fd.pixfmt = PixFmt::UYVA8_4224;
+        auto ring =
+            std::make_shared<gpu::UploadRing>(eng, fd, eng.xferUp());
+        const int slot = ring->acquire();
+        REQUIRE(slot >= 0);
+        pattern::fillRectUYVY(ring->stagingPtr(slot), int(fd.rowBytes()), 0,
+                              0, fd.width, fd.height, y, u, v);
+        if (alpha)
+            memset(ring->stagingPtr(slot) + fd.alphaOffset(), 0xff,
+                   size_t(fd.width) * fd.height);
+        const uint64_t upload = ring->submit(slot);
+        REQUIRE(ring->timeline().waitCompleted(upload, 1'000'000'000));
+        return std::make_pair(
+            ring, std::make_shared<const gpu::GpuFrame>(ring, slot, upload));
+    };
+
+    // Program bus red; fully opaque DSK green.
+    auto [programRing, program] = makeFrame(51, 109, 212, false);
+    auto [keyRing, key] = makeFrame(133, 63, 52, true);
+
+    gpu::Compositor comp(eng, d, 64, 36, 1);
+    gpu::Compositor::TickJob job;
+    job.a = program.get();
+    job.b = program.get();
+    job.dsk[0] = key.get();
+    job.sw.dskLevel[0] = 1.f;
+    job.mvInputs.push_back({program.get()});
+    job.packProgram = true;
+    job.packClean = true;
+
+    VkCommandPool pool = eng.createCommandPool(eng.gfx().family);
+    VkCommandBufferAllocateInfo cai{
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cai.commandPool = pool;
+    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 2;
+    VkCommandBuffer cmd[2]{};
+    vkAllocateCommandBuffers(eng.device(), &cai, cmd);
+    VkCommandBufferBeginInfo bi{
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+
+    vkBeginCommandBuffer(cmd[0], &bi);
+    comp.record(cmd[0], job, 0, 0);
+    vkEndCommandBuffer(cmd[0]);
+    gpu::Timeline timeline = eng.createTimeline();
+    const uint64_t rendered = timeline.reserve();
+    const VkSemaphoreSubmitInfo renderSignal =
+        gpu::VkEngine::timelineSignal(
+            timeline, rendered, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    gpu::VkEngine::SubmitDesc renderSubmit;
+    renderSubmit.cmd = cmd[0];
+    renderSubmit.signalInfos = {&renderSignal, 1};
+    REQUIRE(eng.submit(eng.gfx(), renderSubmit) == VK_SUCCESS);
+
+    vkBeginCommandBuffer(cmd[1], &bi);
+    comp.recordDownCopy(cmd[1], 0, 0, gpu::Compositor::Feed::Program);
+    comp.recordDownCopy(cmd[1], 0, 0, gpu::Compositor::Feed::Clean);
+    vkEndCommandBuffer(cmd[1]);
+    const uint64_t copied = timeline.reserve();
+    const VkSemaphoreSubmitInfo copyWait = gpu::VkEngine::timelineWait(
+        timeline, rendered, VK_PIPELINE_STAGE_2_COPY_BIT);
+    const VkSemaphoreSubmitInfo copySignal = gpu::VkEngine::timelineSignal(
+        timeline, copied, VK_PIPELINE_STAGE_2_COPY_BIT);
+    gpu::VkEngine::SubmitDesc copySubmit;
+    copySubmit.cmd = cmd[1];
+    copySubmit.waits = {&copyWait, 1};
+    copySubmit.signalInfos = {&copySignal, 1};
+    REQUIRE(eng.submit(eng.gfx(), copySubmit) == VK_SUCCESS);
+    REQUIRE(timeline.waitCompleted(copied, 2'000'000'000));
+
+    const size_t offset =
+        ((size_t(d.height / 2) * d.width + d.width / 2) * 2) & ~3ULL;
+    const uint8_t* normal = comp.packPtr(
+        0, gpu::Compositor::Feed::Program);
+    const uint8_t* clean =
+        comp.packPtr(0, gpu::Compositor::Feed::Clean);
+    // Normal program contains the opaque green DSK.
+    CHECK(near(normal[offset + 0], 63, 5));
+    CHECK(near(normal[offset + 1], 133, 5));
+    CHECK(near(normal[offset + 2], 52, 5));
+    // Clean feed remains the underlying red switched mix.
+    CHECK(near(clean[offset + 0], 109, 5));
+    CHECK(near(clean[offset + 1], 51, 5));
+    CHECK(near(clean[offset + 2], 212, 5));
+
+    vkDestroyCommandPool(eng.device(), pool, nullptr);
+    eng.destroyTimeline(timeline);
+}

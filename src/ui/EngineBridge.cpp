@@ -108,6 +108,10 @@ void EngineBridge::startRecording(QString path) {
     engine_.requestRecording(path.toStdString());
 }
 
+void EngineBridge::startCleanRecording(QString path) {
+    engine_.requestCleanRecording(path.toStdString());
+}
+
 int EngineBridge::audioAutoTrimMs(int input) const {
     auto* c = chan(engine_, input);
     return c ? c->autoDelayFrames.load(std::memory_order_relaxed) *
@@ -184,6 +188,9 @@ void EngineBridge::poll() {
                          .arg(engine_.renderedTicks())
                          .arg(engine_.skippedTicks())
                          .arg(engine_.ndiOutFrames());
+    if (engine_.cleanNdiOutFrames())
+        status += QStringLiteral("  clean-ndi %1")
+                      .arg(engine_.cleanNdiOutFrames());
     if (auto* a = engine_.audio())
         status += QStringLiteral("  aud[sk %1 un %2]")
                       .arg(a->mixSkips())

@@ -19,7 +19,9 @@ namespace moo {
 // thread calls it directly while this thread sends video).
 class NdiOutput {
 public:
-    NdiOutput(std::string name, gpu::Compositor& comp, gpu::Timeline& readbackTL);
+    NdiOutput(std::string name, gpu::Compositor& comp,
+              gpu::Timeline& readbackTL,
+              gpu::Compositor::Feed feed = gpu::Compositor::Feed::Program);
     ~NdiOutput();
 
     int64_t framesSent() const { return sent_.load(std::memory_order_relaxed); }
@@ -36,6 +38,7 @@ private:
     std::string name_;
     gpu::Compositor& comp_;
     gpu::Timeline& readbackTL_;
+    gpu::Compositor::Feed feed_;
     NDIlib_send_instance_t sender_ = nullptr;
     std::atomic<int64_t> sent_{0};
     std::atomic<int64_t> audioSent_{0};

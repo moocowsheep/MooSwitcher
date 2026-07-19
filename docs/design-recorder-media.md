@@ -22,7 +22,8 @@ layers,
 - A local raster still can occupy a normal input slot. It remains on-air until
   replaced, and non-opaque source alpha is retained for DSK use.
 
-ISO recording and clean-feed recording remain later layers. Instant replay is
+ISO recording remains a later layer. Clean-feed recording and NDI output are
+implemented separately in `design-clean-feed.md`. Instant replay is
 intentionally outside MooSwitcher's scope.
 
 ## Recorder architecture
@@ -132,7 +133,7 @@ decoder remains the final authority on whether a particular file is readable.
 - Still alpha smoke: an RGBA PNG with a fully transparent surround and
   60%-opaque fill keyed over a separate opaque still; the surround revealed
   the background and the fill blended correctly, with zero render skips.
-- Full automated suite: 73/73 passing after still-image integration.
+- Full automated suite: 74/74 passing after clean-feed integration.
 
 ## Known limits
 

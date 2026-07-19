@@ -56,6 +56,8 @@ TEST_CASE("show file preserves the exact output format") {
     saved.cfg.show.height = 2160;
     saved.cfg.show.fpsN = 24000;
     saved.cfg.show.fpsD = 1001;
+    saved.cfg.cleanNdiOut = true;
+    saved.cfg.cleanNdiOutName = "MooSwitcher CLEAN TEST";
     file.save(saved);
 
     ShowFile::State restored;
@@ -64,6 +66,8 @@ TEST_CASE("show file preserves the exact output format") {
     CHECK(restored.cfg.show.height == 2160);
     CHECK(restored.cfg.show.fpsN == 24000);
     CHECK(restored.cfg.show.fpsD == 1001);
+    CHECK(restored.cfg.cleanNdiOut);
+    CHECK(restored.cfg.cleanNdiOutName == "MooSwitcher CLEAN TEST");
 }
 
 TEST_CASE("show file restores playlists, trim, speed, and loop mode") {

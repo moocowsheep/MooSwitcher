@@ -30,6 +30,7 @@ struct Compositor::CompositePC {
     float k2Level;
     float k2Map[4];
     int32_t k2FullW, k2FullH;
+    int32_t cleanEnabled;
 };
 struct Compositor::TilePC {
     int32_t ox, oy, dw, dh, sw, sh, padX, padY;
@@ -76,7 +77,7 @@ constexpr int kBorder = 3;
 Compositor::Compositor(VkEngine& eng, const VideoFormatDesc& show, int mvW,
                        int mvH, int numInputs)
     : eng_(eng), show_(show), mvW_(mvW & ~1), mvH_(mvH & ~1), numInputs_(numInputs) {
-    static_assert(sizeof(CompositePC) == 152);
+    static_assert(sizeof(CompositePC) == 156);
     static_assert(sizeof(TilePC) == 56);
     // 152 exceeds the 128-byte Vulkan minimum; NVIDIA guarantees 256. Fail
     // loudly on anything smaller rather than truncating the block.
@@ -98,6 +99,10 @@ Compositor::Compositor(VkEngine& eng, const VideoFormatDesc& show, int mvW,
             uint32_t(show_.width), uint32_t(show_.height),
             VK_FORMAT_R16G16B16A16_SFLOAT,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+        clean_[f] = eng_.createImage2D(
+            uint32_t(show_.width), uint32_t(show_.height),
+            VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
         multiview_[f] = eng_.createImage2D(
             uint32_t(mvW_), uint32_t(mvH_), VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
@@ -112,25 +117,30 @@ Compositor::Compositor(VkEngine& eng, const VideoFormatDesc& show, int mvW,
                                        VK_IMAGE_USAGE_SAMPLED_BIT);
         proxyInit_[f].assign(size_t(numInputs_) + 1, false);
 
-        packDev_[f] = eng_.createBuffer(
-            show_.frameBytes(),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        packNvDev_[f] = eng_.createBuffer(
-            nvPackBytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, 0,
-            /*exportable=*/eng_.hasExternalMemoryFd);
+        for (int feed = 0; feed < kFeedCount; ++feed) {
+            packDev_[feed][f] = eng_.createBuffer(
+                show_.frameBytes(),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            packNvDev_[feed][f] = eng_.createBuffer(
+                nvPackBytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, 0,
+                /*exportable=*/eng_.hasExternalMemoryFd);
+        }
     }
     for (auto& rb : readback_)
         rb = eng_.createBuffer(readbackBytes(), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
-    for (auto& pb : packHost_)
-        pb = eng_.createBuffer(show_.frameBytes(), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                   VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                               VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+    for (auto& feed : packHost_)
+        for (auto& pb : feed)
+            pb = eng_.createBuffer(
+                show_.frameBytes(), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
 
     composite_ = makePipe(shaders::composite_comp, shaders::composite_comp_size,
                           {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -141,7 +151,8 @@ Compositor::Compositor(VkEngine& eng, const VideoFormatDesc& show, int mvW,
                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                           VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
                           sizeof(CompositePC));
     tile_ = makePipe(shaders::multiview_tile_comp, shaders::multiview_tile_comp_size,
                      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -171,14 +182,18 @@ Compositor::~Compositor() {
     destroyPipe(proxy_);
     for (int f = 0; f < kFramesInFlight; ++f) {
         eng_.destroyImage(program_[f]);
+        eng_.destroyImage(clean_[f]);
         eng_.destroyImage(multiview_[f]);
         eng_.destroyImage(programProxy_[f]);
         for (auto& p : inputProxy_[f]) eng_.destroyImage(p);
-        eng_.destroyBuffer(packDev_[f]);
-        eng_.destroyBuffer(packNvDev_[f]);
+        for (int feed = 0; feed < kFeedCount; ++feed) {
+            eng_.destroyBuffer(packDev_[feed][f]);
+            eng_.destroyBuffer(packNvDev_[feed][f]);
+        }
     }
     for (auto& b : readback_) eng_.destroyBuffer(b);
-    for (auto& b : packHost_) eng_.destroyBuffer(b);
+    for (auto& feed : packHost_)
+        for (auto& b : feed) eng_.destroyBuffer(b);
     if (labelAtlas_.img) eng_.destroyImage(labelAtlas_);
 }
 
@@ -393,10 +408,11 @@ void Compositor::borderTiles(VkCommandBuffer cmd, int x, int y, int w, int h,
 void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
                         int rbSlot) {
     auto& prog = program_[fif];
+    auto& clean = clean_[fif];
     auto& mv = multiview_[fif];
 
     if (!targetsInit_[fif]) {
-        for (VkImage img : {prog.img, mv.img})
+        for (VkImage img : {prog.img, clean.img, mv.img})
             barrier(cmd, img, VK_PIPELINE_STAGE_2_NONE, 0,
                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                     VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
@@ -420,6 +436,8 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
                                   job.b->viewUV() ? job.b->viewUV() : job.b->view(),
                                   VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorImageInfo pInfo{VK_NULL_HANDLE, prog.view, VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo cleanInfo{VK_NULL_HANDLE, clean.view,
+                                    VK_IMAGE_LAYOUT_GENERAL};
     // Keyers: aux = NV12 UV | UYVA alpha | self-rebound fill (never NULL,
     // same pattern as the UV slots above). Dark keyer falls back to job.a.
     VkDescriptorImageInfo kInfo[kDskCount], kAuxInfo[kDskCount];
@@ -431,7 +449,7 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
         kInfo[k] = {eng_.linearSampler(), f->view(), VK_IMAGE_LAYOUT_GENERAL};
         kAuxInfo[k] = {eng_.linearSampler(), aux, VK_IMAGE_LAYOUT_GENERAL};
     }
-    VkWriteDescriptorSet w[9] = {};
+    VkWriteDescriptorSet w[10] = {};
     w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &aInfo, nullptr, nullptr};
     w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 1, 0, 1,
@@ -450,8 +468,10 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &kInfo[1], nullptr, nullptr};
     w[8] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 8, 0, 1,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &kAuxInfo[1], nullptr, nullptr};
+    w[9] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 9, 0, 1,
+            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &cleanInfo, nullptr, nullptr};
     eng_.cmdPushDescriptorSet(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, composite_.layout,
-                              0, 9, w);
+                              0, 10, w);
     CompositePC cpc{};
     cpc.aFmt = job.a->isNv12() ? 1 : 0;
     cpc.bFmt = job.b->isNv12() ? 1 : 0;
@@ -482,6 +502,7 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
     };
     keyPc(0, cpc.k1Flags, cpc.k1Level, cpc.k1Map, cpc.k1FullW, cpc.k1FullH);
     keyPc(1, cpc.k2Flags, cpc.k2Level, cpc.k2Map, cpc.k2FullW, cpc.k2FullH);
+    cpc.cleanEnabled = job.packClean || job.packCleanNv12;
     vkCmdPushConstants(cmd, composite_.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                        sizeof(cpc), &cpc);
     vkCmdDispatch(cmd, uint32_t((show_.width + 15) / 16),
@@ -493,13 +514,19 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_GENERAL,
             VK_IMAGE_LAYOUT_GENERAL);
+    if (cpc.cleanEnabled)
+        barrier(cmd, clean.img, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_GENERAL,
+                VK_IMAGE_LAYOUT_GENERAL);
 
-    // -- pack program to UYVY (NDI out) --
-    if (job.packProgram) {
+    const auto packUyvy = [&](const Image& source, Feed feed) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pack_.pipe);
-        VkDescriptorImageInfo srcInfo{eng_.linearSampler(), prog.view,
+        VkDescriptorImageInfo srcInfo{eng_.linearSampler(), source.view,
                                       VK_IMAGE_LAYOUT_GENERAL};
-        VkDescriptorBufferInfo dstInfo{packDev_[fif].buf, 0, VK_WHOLE_SIZE};
+        VkDescriptorBufferInfo dstInfo{packDev_[int(feed)][fif].buf, 0,
+                                       VK_WHOLE_SIZE};
         VkWriteDescriptorSet pw[2] = {};
         pw[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0,
                  0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &srcInfo, nullptr,
@@ -514,14 +541,16 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
                            sizeof(ppc), &ppc);
         vkCmdDispatch(cmd, uint32_t((show_.width / 2 + 15) / 16),
                       uint32_t((show_.height + 15) / 16), 1);
-    }
+    };
+    if (job.packProgram) packUyvy(prog, Feed::Program);
+    if (job.packClean) packUyvy(clean, Feed::Clean);
 
-    // -- pack program to NV12 (SRT encoder) --
-    if (job.packNv12) {
+    const auto packNv12 = [&](const Image& source, Feed feed) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, packNv_.pipe);
-        VkDescriptorImageInfo srcInfo{eng_.linearSampler(), prog.view,
+        VkDescriptorImageInfo srcInfo{eng_.linearSampler(), source.view,
                                       VK_IMAGE_LAYOUT_GENERAL};
-        VkDescriptorBufferInfo dstInfo{packNvDev_[fif].buf, 0, VK_WHOLE_SIZE};
+        VkDescriptorBufferInfo dstInfo{packNvDev_[int(feed)][fif].buf, 0,
+                                       VK_WHOLE_SIZE};
         VkWriteDescriptorSet pw[2] = {};
         pw[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0,
                  0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &srcInfo, nullptr,
@@ -536,7 +565,9 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
                            sizeof(npc), &npc);
         vkCmdDispatch(cmd, uint32_t((show_.width / 4 + 15) / 16),
                       uint32_t((show_.height / 2 + 15) / 16), 1);
-    }
+    };
+    if (job.packNv12) packNv12(prog, Feed::Program);
+    if (job.packCleanNv12) packNv12(clean, Feed::Clean);
 
     // -- proxies: program + inputs --
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, proxy_.pipe);
@@ -678,12 +709,13 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
     vkCmdCopyImageToBuffer2(cmd, &ci);
 }
 
-void Compositor::recordDownCopy(VkCommandBuffer cmd, int fif, int packSlot) {
+void Compositor::recordDownCopy(VkCommandBuffer cmd, int fif, int packSlot,
+                                Feed feed) {
     VkBufferCopy2 region{VK_STRUCTURE_TYPE_BUFFER_COPY_2};
     region.size = show_.frameBytes();
     VkCopyBufferInfo2 ci{VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2};
-    ci.srcBuffer = packDev_[fif].buf;
-    ci.dstBuffer = packHost_[packSlot].buf;
+    ci.srcBuffer = packDev_[int(feed)][fif].buf;
+    ci.dstBuffer = packHost_[int(feed)][packSlot].buf;
     ci.regionCount = 1;
     ci.pRegions = &region;
     vkCmdCopyBuffer2(cmd, &ci);

@@ -30,6 +30,7 @@ int main(int argc, char** argv) {
     moo::EngineConfig& cfg = show.cfg;
     QString shotPath;
     QString recordPath;
+    QString cleanRecordPath;
     double shotDelayS = 6.0;
     int shotTab = 0;
     bool cliInputs = false;
@@ -51,6 +52,11 @@ int main(int argc, char** argv) {
             addInput(moo::InputSpec::Type::Still, args[++i]);
         else if (args[i] == QStringLiteral("--validate"))
             cfg.validation = true;
+        else if (args[i] == QStringLiteral("--clean-ndi-out") &&
+                 i + 1 < args.size()) {
+            cfg.cleanNdiOut = true;
+            cfg.cleanNdiOutName = args[++i].toStdString();
+        }
         else if (args[i] == QStringLiteral("--show") && i + 1 < args.size()) {
             const auto parts = args[++i].split('x');
             if (parts.size() == 2) {
@@ -63,6 +69,9 @@ int main(int argc, char** argv) {
             cfg.srtBitrateKbps = args[++i].toInt();
         else if (args[i] == QStringLiteral("--record") && i + 1 < args.size())
             recordPath = args[++i];
+        else if (args[i] == QStringLiteral("--clean-record") &&
+                 i + 1 < args.size())
+            cleanRecordPath = args[++i];
         else if (args[i] == QStringLiteral("--record-bitrate") &&
                  i + 1 < args.size())
             cfg.recordBitrateKbps = args[++i].toInt();
@@ -88,6 +97,8 @@ int main(int argc, char** argv) {
     }
     if (!recordPath.isEmpty())
         engine.requestRecording(recordPath.toStdString());
+    if (!cleanRecordPath.isEmpty())
+        engine.requestCleanRecording(cleanRecordPath.toStdString());
 
     // Control-surface and mixer state restore.
     if (auto* aud = engine.audio())

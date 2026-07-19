@@ -18,6 +18,7 @@ layout(binding = 5) uniform sampler2D k1Fill;
 layout(binding = 6) uniform sampler2D k1Aux;
 layout(binding = 7) uniform sampler2D k2Fill;
 layout(binding = 8) uniform sampler2D k2Aux;
+layout(binding = 9, rgba16f) uniform writeonly image2D cleanImg;
 
 // Keyer flags: bit0 = NV12, bit1 = has alpha plane, bit2 = premultiplied,
 // bit3 = BT.601.
@@ -43,6 +44,7 @@ layout(push_constant) uniform PC {
     float k2Level;
     vec4 k2Map;
     ivec2 k2Full;
+    int cleanEnabled;
 } pc;
 
 vec3 fetchInput(sampler2D t, sampler2D tuv, int fmt, ivec2 full, vec4 map,
@@ -109,6 +111,11 @@ void main() {
         vec3 b = fetchInput(inB, inBuv, pc.bFmt, pc.bFull, pc.bMap, pc.bCm, uv);
         c = mix(c, b, m);
     }
+    // The clean feed is the switched A/B mix with global FTB, before DSK
+    // graphics. It is written only when a clean output consumer is active.
+    if (pc.cleanEnabled != 0)
+        imageStore(cleanImg, px, vec4(c * (1.0 - pc.ftb), 1.0));
+
     // DSKs over the mix (DSK2 on top), under FTB so fade-to-black takes the
     // graphics out too.
     if (pc.k1Level > 0.0)

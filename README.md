@@ -10,7 +10,8 @@ within ±8 ms on NDI and SRT paths at 1080p and 8K), live source picker (swap ND
 per input mid-show), show-file persistence (restart restores everything), health banners,
 runtime counters in the GUI, HEVC/AAC program recording, paced local clip
 playlists with trim, speed, and transport controls, and static raster inputs
-with native alpha. Per-input **frame sync**: re-times a source onto the output tick
+with native alpha. A parallel clean feed can be recorded or sent over NDI
+without DSK graphics. Per-input **frame sync**: re-times a source onto the output tick
 grid (1–4 frame buffer absorbs bursty delivery, rate slip becomes counted repeats/drops) and
 auto-aligns the input's audio to the re-timed video — the cross-session A/V phase lottery
 collapses to a constant (design + measurements: `docs/design-framesync.md`,
@@ -60,6 +61,15 @@ are HEVC video plus 48 kHz stereo AAC in a finalized Matroska (`.mkv`) file;
 encoding and disk I/O run off the render thread, and recorder backpressure never
 stalls program. Headless: `--record PATH.mkv [--record-bitrate KBPS]` (bitrate
 defaults from the output format).
+
+Use **CLEAN REC** for the switched A/B mix without DSK graphics. The clean feed
+retains transitions, FTB, and master audio. Program and clean recordings can
+run simultaneously with independent NVENC sessions and backpressure. Headless:
+`--clean-record PATH.mkv`; `--record-bitrate` applies to both. An optional
+clean NDI sender is enabled with `--clean-ndi-out "MooSwitcher CLEAN"` in
+either executable and can run alongside normal program NDI. Its enabled state
+and name persist in a GUI show file. Design and validation:
+`docs/design-clean-feed.md`.
 
 Local H.264/HEVC clips can occupy any input: open the input source picker and
 use **ADD CLIPS** to build and reorder a playlist, then use the **MEDIA** tab for

@@ -33,7 +33,9 @@ public:
     FileRecorder(media::CudaCtx& cuda, gpu::Compositor& comp,
                  gpu::Timeline& renderTL,
                  std::string path, const VideoFormatDesc& show,
-                 bool withAudio, int64_t startTick, int bitrateKbps = 0);
+                 bool withAudio, int64_t startTick, int bitrateKbps = 0,
+                 gpu::Compositor::Feed feed =
+                     gpu::Compositor::Feed::Program);
     ~FileRecorder();
 
     bool ok() const { return ok_; }
@@ -63,6 +65,8 @@ private:
     media::CudaCtx& cuda_;
     gpu::Compositor& comp_;
     gpu::Timeline& renderTL_;
+    gpu::Compositor::Feed feed_;
+    std::string statsPrefix_;
     std::string path_;
     VideoFormatDesc show_;
     int64_t startTick_ = 0;

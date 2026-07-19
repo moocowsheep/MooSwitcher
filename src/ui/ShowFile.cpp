@@ -19,7 +19,10 @@ bool ShowFile::State::cfgEquals(const EngineConfig& a, const EngineConfig& b) {
             a.inputs[i].mediaPlaylist != b.inputs[i].mediaPlaylist)
             return false;
     return a.show == b.show && a.ndiOut == b.ndiOut &&
-           a.ndiOutName == b.ndiOutName && a.srtUrl == b.srtUrl &&
+           a.ndiOutName == b.ndiOutName &&
+           a.cleanNdiOut == b.cleanNdiOut &&
+           a.cleanNdiOutName == b.cleanNdiOutName &&
+           a.srtUrl == b.srtUrl &&
            a.srtBitrateKbps == b.srtBitrateKbps &&
            a.recordBitrateKbps == b.recordBitrateKbps && a.audio == b.audio &&
            a.masterAudioDelayMs == b.masterAudioDelayMs;
@@ -53,6 +56,13 @@ bool ShowFile::load(State& st) const {
     st.cfg.ndiOut = s.value("ndiOut", st.cfg.ndiOut).toBool();
     st.cfg.ndiOutName =
         s.value("ndiOutName", QString::fromStdString(st.cfg.ndiOutName))
+            .toString()
+            .toStdString();
+    st.cfg.cleanNdiOut =
+        s.value("cleanNdiOut", st.cfg.cleanNdiOut).toBool();
+    st.cfg.cleanNdiOutName =
+        s.value("cleanNdiOutName",
+                QString::fromStdString(st.cfg.cleanNdiOutName))
             .toString()
             .toStdString();
     st.cfg.srtUrl = s.value("srtOut", QString::fromStdString(st.cfg.srtUrl))
@@ -160,6 +170,9 @@ void ShowFile::save(const State& st) const {
     s.setValue("fpsD", qlonglong(st.cfg.show.fpsD));
     s.setValue("ndiOut", st.cfg.ndiOut);
     s.setValue("ndiOutName", QString::fromStdString(st.cfg.ndiOutName));
+    s.setValue("cleanNdiOut", st.cfg.cleanNdiOut);
+    s.setValue("cleanNdiOutName",
+               QString::fromStdString(st.cfg.cleanNdiOutName));
     s.setValue("srtOut", QString::fromStdString(st.cfg.srtUrl));
     s.setValue("srtBitrateKbps", st.cfg.srtBitrateKbps);
     s.setValue("recordBitrateKbps", st.cfg.recordBitrateKbps);

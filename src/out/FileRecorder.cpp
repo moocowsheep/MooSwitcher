@@ -11,8 +11,11 @@ namespace moo {
 FileRecorder::FileRecorder(media::CudaCtx& cuda, gpu::Compositor& comp,
                            gpu::Timeline& renderTL,
                            std::string path, const VideoFormatDesc& show,
-                           bool withAudio, int64_t startTick, int bitrateKbps)
-    : cuda_(cuda), comp_(comp), renderTL_(renderTL),
+                           bool withAudio, int64_t startTick, int bitrateKbps,
+                           gpu::Compositor::Feed feed)
+    : cuda_(cuda), comp_(comp), renderTL_(renderTL), feed_(feed),
+      statsPrefix_(feed == gpu::Compositor::Feed::Clean ? "cleanRecord"
+                                                       : "record"),
       path_(std::move(path)), show_(show), startTick_(startTick) {
     static std::once_flag networkInit;
     std::call_once(networkInit, [] { avformat_network_init(); });
@@ -24,7 +27,7 @@ FileRecorder::FileRecorder(media::CudaCtx& cuda, gpu::Compositor& comp,
         MOO_LOGW("record: AAC encoder unavailable; recording video-only");
 
     for (int fif = 0; fif < gpu::Compositor::kFramesInFlight; ++fif) {
-        const int fd = comp_.nvPackExportFd(fif);
+        const int fd = comp_.nvPackExportFd(fif, feed_);
         if (fd < 0 ||
             !cuda_.importVkFd(fd, comp_.nvPackBytes(), imports_[fif])) {
             MOO_LOGE("record: NV12 pack import failed (fif %d)", fif);
@@ -38,7 +41,7 @@ FileRecorder::FileRecorder(media::CudaCtx& cuda, gpu::Compositor& comp,
     encodeThread_ =
         std::jthread([this](std::stop_token stop) { encodeLoop(stop); });
     muxThread_ = std::jthread([this](std::stop_token stop) { muxLoop(stop); });
-    MOO_LOGI("record: started '%s'", path_.c_str());
+    MOO_LOGI("%s: started '%s'", statsPrefix_.c_str(), path_.c_str());
 }
 
 FileRecorder::~FileRecorder() {
@@ -143,15 +146,16 @@ void FileRecorder::pushAudio(const float* lr, int frames,
         if (!audioPackets_.push(packet)) {
             av_packet_free(&packet);
             dropped_.fetch_add(1, std::memory_order_relaxed);
-            Stats::counter("record.audioPacketDrops").add();
+            Stats::counter(statsPrefix_ + ".audioPacketDrops").add();
         }
     }
 }
 
 void FileRecorder::encodeLoop(std::stop_token stop) {
-    auto& encodedCounter = Stats::counter("record.frames");
-    auto& waitCounter = Stats::counter("record.renderWaitTimeouts");
-    auto& dropCounter = Stats::counter("record.videoPacketDrops");
+    auto& encodedCounter = Stats::counter(statsPrefix_ + ".frames");
+    auto& waitCounter =
+        Stats::counter(statsPrefix_ + ".renderWaitTimeouts");
+    auto& dropCounter = Stats::counter(statsPrefix_ + ".videoPacketDrops");
     cuda_.makeCurrent();
     std::vector<AVPacket*> packets;
 
@@ -191,7 +195,7 @@ void FileRecorder::encodeLoop(std::stop_token stop) {
 }
 
 void FileRecorder::muxLoop(std::stop_token stop) {
-    auto& packetCounter = Stats::counter("record.packets");
+    auto& packetCounter = Stats::counter(statsPrefix_ + ".packets");
     const AVRational videoTimeBase = encoder_.timeBase();
     const AVRational audioTimeBase = aac_.timeBase();
 
@@ -227,8 +231,8 @@ void FileRecorder::muxLoop(std::stop_token stop) {
         }
     }
     closeMux();
-    MOO_LOGI("record: stopped '%s' (%lld frames, %lld packets%s)",
-             path_.c_str(), (long long)framesEncoded(),
+    MOO_LOGI("%s: stopped '%s' (%lld frames, %lld packets%s)",
+             statsPrefix_.c_str(), path_.c_str(), (long long)framesEncoded(),
              (long long)packetsWritten(), failed() ? ", errors" : "");
 }
 

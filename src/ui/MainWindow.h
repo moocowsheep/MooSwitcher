@@ -51,6 +51,8 @@ private:
     QLabel* previewReadout_ = nullptr;
     QPushButton* recordBtn_ = nullptr;
     QLabel* recordState_ = nullptr;
+    QPushButton* cleanRecordBtn_ = nullptr;
+    QLabel* cleanRecordState_ = nullptr;
     QComboBox* outputResolution_ = nullptr;
     QComboBox* outputFrameRate_ = nullptr;
     QLabel* outputFormatState_ = nullptr;

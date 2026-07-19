@@ -22,8 +22,11 @@ public:
     static constexpr int kFramesInFlight = 2;
     static constexpr int kReadbackSlots = 3;   // multiview (GUI)
     static constexpr int kPackSlots = 4;       // program UYVY (NDI out)
+    static constexpr int kFeedCount = 2;
     static constexpr int kProxyW = 960, kProxyH = 544;
     static constexpr int kLabelRowH = 24;
+
+    enum class Feed : int { Program = 0, Clean = 1 };
 
     Compositor(VkEngine& eng, const VideoFormatDesc& show, int mvW, int mvH,
                int numInputs);
@@ -44,12 +47,15 @@ public:
         const GpuFrame* dsk[kDskCount] = {nullptr, nullptr};
         int tallyDsk[kDskCount] = {-1, -1};
         bool packProgram = false;         // record UYVY pack (NDI out enabled)
+        bool packClean = false;           // UYVY clean-feed NDI output
         bool packNv12 = false;            // record NV12 pack (SRT out enabled)
+        bool packCleanNv12 = false;       // clean-feed recorder
     };
 
     void record(VkCommandBuffer cmd, const TickJob& job, int fif, int rbSlot);
     // Copy pack device buffer (fif) into host pack slot; runs on xferDown.
-    void recordDownCopy(VkCommandBuffer cmd, int fif, int packSlot);
+    void recordDownCopy(VkCommandBuffer cmd, int fif, int packSlot,
+                        Feed feed = Feed::Program);
 
     // Multiview readback (GUI).
     const uint8_t* readbackPtr(int rbSlot) const {
@@ -60,15 +66,22 @@ public:
     int mvHeight() const { return mvH_; }
 
     // Pack host ring (NDI sender).
-    const uint8_t* packPtr(int slot) const {
-        return static_cast<const uint8_t*>(packHost_[slot].mapped);
+    const uint8_t* packPtr(int slot, Feed feed = Feed::Program) const {
+        return static_cast<const uint8_t*>(
+            packHost_[int(feed)][slot].mapped);
     }
     size_t packBytes() const { return show_.frameBytes(); }
-    std::atomic<uint64_t>& packStamp(int slot) { return packStamp_[slot]; }
-    std::atomic<bool>& packPinned(int slot) { return packPinned_[slot]; }
+    std::atomic<uint64_t>& packStamp(int slot, Feed feed = Feed::Program) {
+        return packStamp_[int(feed)][slot];
+    }
+    std::atomic<bool>& packPinned(int slot, Feed feed = Feed::Program) {
+        return packPinned_[int(feed)][slot];
+    }
 
-    // NV12 pack buffers for the SRT encoder (exportable; importer owns fds).
-    int nvPackExportFd(int fif) { return eng_.exportMemoryFd(packNvDev_[fif]); }
+    // NV12 pack buffers for SRT/recorders (exportable; importer owns fds).
+    int nvPackExportFd(int fif, Feed feed = Feed::Program) {
+        return eng_.exportMemoryFd(packNvDev_[int(feed)][fif]);
+    }
     size_t nvPackBytes() const { return size_t(show_.width) * show_.height * 3 / 2; }
 
     // Label atlas: rows 0=PROGRAM, 1=PREVIEW, 2+i=input i; usedWidths in pixels.
@@ -122,6 +135,7 @@ private:
     int mvW_, mvH_, numInputs_;
 
     Image program_[kFramesInFlight];
+    Image clean_[kFramesInFlight];
     Image multiview_[kFramesInFlight];
     Image programProxy_[kFramesInFlight];
     std::vector<Image> inputProxy_[kFramesInFlight];  // [fif][input]
@@ -129,11 +143,11 @@ private:
     bool targetsInit_[kFramesInFlight] = {};
 
     Buffer readback_[kReadbackSlots];
-    Buffer packDev_[kFramesInFlight];
-    Buffer packNvDev_[kFramesInFlight];  // exportable, CUDA-imported by SRT out
-    Buffer packHost_[kPackSlots];
-    std::atomic<uint64_t> packStamp_[kPackSlots]{};
-    std::atomic<bool> packPinned_[kPackSlots]{};
+    Buffer packDev_[kFeedCount][kFramesInFlight];
+    Buffer packNvDev_[kFeedCount][kFramesInFlight];
+    Buffer packHost_[kFeedCount][kPackSlots];
+    std::atomic<uint64_t> packStamp_[kFeedCount][kPackSlots]{};
+    std::atomic<bool> packPinned_[kFeedCount][kPackSlots]{};
 
     Image labelAtlas_{};
     std::vector<int> labelUsedW_;
