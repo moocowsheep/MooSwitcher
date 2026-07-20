@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@
 #include "core/Log.h"
 #include "core/MediaClock.h"
 #include "core/Stats.h"
+#include "ctl/ControlServer.h"
 #include "engine/Engine.h"
 #include "media/StillImage.h"
 
@@ -53,6 +55,7 @@ int main(int argc, char** argv) {
         bool done = false;
     };
     std::vector<DskToggle> dskToggles;  // --dsk-toggle-after S:K
+    int controlPort = 0;  // 0 = off (benches run several instances at once)
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -217,6 +220,9 @@ int main(int argc, char** argv) {
             int k = 0;
             if (!v || sscanf(v, "%lf:%d", &s, &k) != 2) return 2;
             dskToggles.push_back({s, k});
+        } else if (a == "--control-port") {
+            const char* v = next();
+            if (v) controlPort = atoi(v);
         } else if (a == "--validate") {
             cfg.validation = true;
         } else {
@@ -236,7 +242,8 @@ int main(int argc, char** argv) {
                     "[--dump-every S] [--cuts] [--no-audio] "
                     "[--audio-delay MS] [--framesync IDX[:FRAMES]] "
                     "[--dsk K:SRC] [--dsk-fade K:TICKS] "
-                    "[--dsk-toggle-after S:K] [--validate]\n");
+                    "[--dsk-toggle-after S:K] [--control-port PORT] "
+                    "[--validate]\n");
             return 2;
         }
     }
@@ -269,6 +276,9 @@ int main(int argc, char** argv) {
         engine.post({moo::Command::Type::SetDskSource, k, src, 0.f});
     for (auto [k, ticks] : dskFades)
         engine.post({moo::Command::Type::SetDskFade, k, ticks, 0.f});
+    std::unique_ptr<moo::ctl::ControlServer> control;
+    if (controlPort > 0)
+        control = std::make_unique<moo::ctl::ControlServer>(engine, controlPort);
 
     const int64_t t0 = moo::MediaClock::nowNs();
     const int64_t endNs = t0 + int64_t(duration * 1e9);

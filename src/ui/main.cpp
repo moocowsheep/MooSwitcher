@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <memory>
 
 #include <QApplication>
 #include <QIcon>
@@ -7,6 +8,7 @@
 #include <QTimer>
 
 #include "core/Log.h"
+#include "ctl/ControlServer.h"
 #include "engine/Engine.h"
 #include "ui/EngineBridge.h"
 #include "ui/MainWindow.h"
@@ -33,6 +35,9 @@ int main(int argc, char** argv) {
     QString cleanRecordPath;
     double shotDelayS = 6.0;
     int shotTab = 0;
+    // Remote control (Companion et al). On by default: a production console
+    // is expected to be reachable; 0 disables.
+    int controlPort = 9923;
     bool cliInputs = false;
     auto addInput = [&](moo::InputSpec::Type t, const QString& ref) {
         if (!cliInputs) cfg.inputs.clear();  // CLI replaces the stored set
@@ -84,6 +89,9 @@ int main(int argc, char** argv) {
         else if (args[i] == QStringLiteral("--screenshot-tab") &&
                  i + 1 < args.size())
             shotTab = args[++i].toInt();
+        else if (args[i] == QStringLiteral("--control-port") &&
+                 i + 1 < args.size())
+            controlPort = args[++i].toInt();
     }
     // A fixed 21-input frame (7 x 3 on the multiview). Unassigned slots are
     // black until the operator patches a source from the INPUTS tab.
@@ -111,6 +119,11 @@ int main(int argc, char** argv) {
             aud->channel(i).solo.store(ch.solo);
             aud->channel(i).delayMs.store(ch.delayMs);
         }
+
+    std::unique_ptr<moo::ctl::ControlServer> control;
+    if (controlPort > 0)
+        control =
+            std::make_unique<moo::ctl::ControlServer>(engine, controlPort);
 
     QStringList names;
     for (const auto& n : cfg.inputs) names << QString::fromStdString(n.ref);

@@ -131,11 +131,19 @@ NDI discovery needs `avahi-daemon` running.
 ./scripts/bench_speedhq.sh 7680x4320 30 build
 ```
 
+## Remote control
+
+A TCP control port (GUI default 9923) accepts plain-text commands and
+pushes JSON state — see `docs/remote-control.md`. A ready-made Bitfocus
+Companion module with tally feedbacks and presets lives in `companion/`.
+
 ## Layout
 
 - `src/core/` — MediaClock (rational fps, drift-free), SPSC ring / latest-frame mailbox, stats
 - `src/engine/` — SwitcherCore: pure program/preview + transition state machine (unit-tested)
 - `src/ndi/` — SDK lifecycle wrapper (all NDI includes route through `NdiLib.h`)
+- `src/ctl/` — remote-control wire protocol + TCP server
+- `companion/` — Bitfocus Companion module (`npm run package` → installable tgz)
 - `tools/` — moo-testgen / moo-latmeter + shared pattern layout (`tools/common/pattern.h`)
 - `docs/` — bench reports; the full v1 plan lives with the project owner
 

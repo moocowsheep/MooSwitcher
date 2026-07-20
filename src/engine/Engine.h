@@ -79,7 +79,12 @@ public:
     bool start(const EngineConfig& cfg);
     void stop();
 
-    void post(const Command& c) { cmds_.push(c); }
+    // Serialized: the command ring is SPSC and both the GUI thread and the
+    // remote-control server post (control rate, contention negligible).
+    void post(const Command& c) {
+        std::lock_guard lk(postM_);
+        cmds_.push(c);
+    }
 
     // Source picker: swap input `index` to a new source. The render thread
     // performs the swap between ticks (placeholder until the new source
@@ -123,6 +128,9 @@ public:
         bool dskOn[kDskCount] = {false, false};
         float dskLevel[kDskCount] = {0.f, 0.f};
         int dskSrc[kDskCount] = {0, 0};
+        int transType = 0;  // TransitionType as int
+        int transDur = 30;  // ticks
+        float transSoftness = 0.02f;
     };
     UiState uiState() const {
         std::lock_guard lk(uiM_);
@@ -174,6 +182,7 @@ private:
     std::shared_ptr<gpu::UploadRing> placeholderRing_;
     std::shared_ptr<const gpu::GpuFrame> placeholder_;
 
+    std::mutex postM_;  // post() producers (GUI + control server)
     SpscRing<Command> cmds_{64};
     MediaClock clock_;
     SwitcherCore switcher_;  // render thread only

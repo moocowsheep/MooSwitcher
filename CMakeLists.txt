@@ -20,6 +20,7 @@ add_library(moo_core STATIC
   src/engine/SwitcherCore.cpp
   src/audio/MixerCore.cpp
   src/audio/AudioEngine.cpp
+  src/ctl/ControlProtocol.cpp
 )
 target_include_directories(moo_core PUBLIC src)
 target_link_libraries(moo_core PUBLIC Threads::Threads)
@@ -128,6 +129,7 @@ if(NDI_FOUND)
 
   add_library(moo_engine STATIC
     src/engine/Engine.cpp
+    src/ctl/ControlServer.cpp
     src/in/SrtInput.cpp
     src/in/StillInput.cpp
     src/ndi/NdiFinder.cpp
@@ -204,6 +206,7 @@ if(MOO_BUILD_TESTS)
     tests/strip_test.cpp
     tests/audio_test.cpp
     tests/aac_test.cpp
+    tests/control_protocol_test.cpp
     tests/media_playlist_test.cpp
     tests/gpu_composite_test.cpp
     tests/interop_test.cpp

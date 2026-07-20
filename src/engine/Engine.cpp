@@ -719,7 +719,10 @@ void Engine::renderLoop(std::stop_token st) {
                    job.ftb,
                    {job.dskOn[0], job.dskOn[1]},
                    {job.dskLevel[0], job.dskLevel[1]},
-                   {job.dskSrc[0], job.dskSrc[1]}};
+                   {job.dskSrc[0], job.dskSrc[1]},
+                   int(switcher_.transitionType()),
+                   int(switcher_.transitionDuration()),
+                   switcher_.transitionSoftness()};
         }
 
         // -- tally to sources (both buses are hot during a transition; a

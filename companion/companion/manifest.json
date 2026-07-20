@@ -1,0 +1,26 @@
+{
+	"$schema": "../node_modules/@companion-module/base/assets/manifest.schema.json",
+	"id": "mooswitcher",
+	"name": "mooswitcher",
+	"shortname": "mooswitcher",
+	"description": "Control the MooSwitcher live video switcher (buses, transitions, DSKs, media, recording, audio) over its TCP remote-control port",
+	"version": "1.0.0",
+	"license": "MIT",
+	"repository": "https://github.com/moocowsheep/MooSwitcher",
+	"bugs": "https://github.com/moocowsheep/MooSwitcher/issues",
+	"maintainers": [
+		{
+			"name": "moocowsheep"
+		}
+	],
+	"legacyIds": [],
+	"runtime": {
+		"type": "node18",
+		"api": "nodejs-ipc",
+		"apiVersion": "0.0.0",
+		"entrypoint": "../src/main.js"
+	},
+	"manufacturer": "MooSwitcher",
+	"products": ["MooSwitcher"],
+	"keywords": ["switcher", "video", "ndi", "srt"]
+}

@@ -60,6 +60,9 @@ public:
 
     int program() const { return program_; }
     int preview() const { return preview_; }
+    TransitionType transitionType() const { return transType_; }
+    int64_t transitionDuration() const { return transDur_; }
+    float transitionSoftness() const { return softness_; }
     bool inTransition() const { return autoActive_ || tbarActive_; }
     bool ftbEngaged() const { return ftbTarget_ > 0.5f; }
     bool dskOn(int k) const { return dsk_[k].target > 0.5f; }
