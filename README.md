@@ -149,6 +149,8 @@ Companion module with tally feedbacks and presets lives in `companion/`.
 
 ## License
 
+Copyright © 2026 Devin Block.
+
 MooSwitcher is licensed under the **Mozilla Public License 2.0** (MPL-2.0) — see
 [`LICENSE.md`](LICENSE.md). MPL-2.0 is file-level copyleft: modifications to
 MooSwitcher's own source files must stay open, but the project may be built and
