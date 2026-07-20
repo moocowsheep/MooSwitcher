@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
 // End-to-end GPU golden test: synthetic UYVY -> UploadRing -> composite ->
 // multiview tile -> readback, asserting converted RGB values. Runs on any
 // machine with a Vulkan device; skips otherwise.

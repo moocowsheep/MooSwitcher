@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
 // The M3 gate: Vulkan exportable buffer <-> CUDA external-memory roundtrip.
 // Runs before any encoder code exists; skips without a GPU/CUDA.
 #include <catch2/catch_test_macros.hpp>

@@ -147,6 +147,14 @@ Companion module with tally feedbacks and presets lives in `companion/`.
 - `tools/` — moo-testgen / moo-latmeter + shared pattern layout (`tools/common/pattern.h`)
 - `docs/` — bench reports; the full v1 plan lives with the project owner
 
+## License
+
+MooSwitcher is licensed under the **Mozilla Public License 2.0** (MPL-2.0) — see
+[`LICENSE.md`](LICENSE.md). MPL-2.0 is file-level copyleft: modifications to
+MooSwitcher's own source files must stay open, but the project may be built and
+distributed while linked against the proprietary NDI SDK and the NVIDIA runtime
+(CUDA/NVENC) without a separate linking exception.
+
 ---
 NDI® is a registered trademark of Vizrt NDI AB. The standard NDI SDK is royalty-free
 including commercial use, but commercial applications must be registered with

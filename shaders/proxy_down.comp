@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
 #version 450
 // Downscale one source (packed UYVY or RGB) into an RGBA8 proxy with a 2x2
 // supersample of bilinear taps -- multiview never samples full-res frames.

@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
 #version 450
 // Program compositor: up to two UYVY inputs -> RGBA16F program image.
 // UYVY unpack is fused into sampling (no full-res RGB intermediates).

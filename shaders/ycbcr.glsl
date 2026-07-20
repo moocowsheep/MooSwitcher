@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
 // Shared YCbCr helpers: limited-range BT.709/601 conversion and sampling of
 // UYVY frames stored as RGBA8 textures at (width/2, height) -- one texel per
 // macropixel: r=U g=Y0 b=V a=Y1. All filtering is done manually because the
