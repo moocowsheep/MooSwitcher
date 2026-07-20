@@ -17,6 +17,9 @@ namespace moo::ctl {
 // Single poll()-driven thread owns all sockets. Qt-free; used by both the
 // GUI and moo-headless. A failed bind logs and leaves the server inert --
 // remote control must never take the show down.
+//
+// Lifetime: the poll thread snapshots engine state every iteration, so the
+// server MUST be destroyed before Engine::stop() tears down inputs/audio.
 class ControlServer {
 public:
     ControlServer(Engine& engine, int port);

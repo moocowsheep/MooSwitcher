@@ -395,6 +395,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    control.reset();  // its poll thread reads engine state; stop it first
     engine.stop();
 
     MOO_LOGI("-- final counters (nonzero) --");

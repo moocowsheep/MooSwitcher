@@ -149,6 +149,7 @@ int main(int argc, char** argv) {
     }
 
     const int rc = app.exec();
+    control.reset();  // its poll thread reads engine state; stop it first
     engine.stop();
     return rc;
 }
