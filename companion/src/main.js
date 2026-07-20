@@ -24,7 +24,6 @@ class MooSwitcherInstance extends InstanceBase {
 	async init(config) {
 		this.config = config
 		this.rebuildDefinitions()
-		this.setPresetDefinitions(getPresets(this))
 		this.initConnection()
 	}
 
@@ -138,12 +137,14 @@ class MooSwitcherInstance extends InstanceBase {
 		}
 	}
 
-	// Rebuilds everything whose option dropdowns embed input names.
+	// Rebuilds everything whose option dropdowns or button text embed input
+	// names or the connection label.
 	rebuildDefinitions() {
 		this.setActionDefinitions(getActions(this))
 		this.setFeedbackDefinitions(getFeedbacks(this))
 		this.setVariableDefinitions(getVariableDefinitions(this))
 		this.setVariableValues(getVariableValues(this))
+		this.setPresetDefinitions(getPresets(this))
 	}
 
 	sendCmd(cmd) {

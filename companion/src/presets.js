@@ -3,28 +3,46 @@
 // appear once connected.
 const { combineRgb } = require('@companion-module/base')
 
+const RED = combineRgb(200, 0, 0)
+const GREEN = combineRgb(0, 160, 0)
+const AMBER = combineRgb(255, 140, 0)
 const WHITE = combineRgb(255, 255, 255)
 const BLACK = combineRgb(0, 0, 0)
 
 module.exports = function getPresets(self) {
 	const presets = {}
+	// Connection label for variable references in button text; presets are
+	// rebuilt after init, when the label is known.
+	const label = self.label || 'mooswitcher'
 
 	for (let n = 1; n <= self.inputCount(); ++n) {
 		presets[`pgm_${n}`] = {
 			type: 'button',
 			category: 'Program',
 			name: `Program ${n}`,
-			style: { text: `$(mooswitcher:input_${n}_name)`, size: 'auto', color: WHITE, bgcolor: BLACK },
+			style: { text: `$(${label}:input_${n}_name)`, size: 'auto', color: WHITE, bgcolor: BLACK },
 			steps: [{ down: [{ actionId: 'program', options: { input: n } }], up: [] }],
-			feedbacks: [{ feedbackId: 'program', options: { input: n } }],
+			feedbacks: [
+				{
+					feedbackId: 'program',
+					options: { input: n },
+					style: { bgcolor: RED, color: WHITE },
+				},
+			],
 		}
 		presets[`pvw_${n}`] = {
 			type: 'button',
 			category: 'Preview',
 			name: `Preview ${n}`,
-			style: { text: `$(mooswitcher:input_${n}_name)`, size: 'auto', color: WHITE, bgcolor: BLACK },
+			style: { text: `$(${label}:input_${n}_name)`, size: 'auto', color: WHITE, bgcolor: BLACK },
 			steps: [{ down: [{ actionId: 'preview', options: { input: n } }], up: [] }],
-			feedbacks: [{ feedbackId: 'preview', options: { input: n } }],
+			feedbacks: [
+				{
+					feedbackId: 'preview',
+					options: { input: n },
+					style: { bgcolor: GREEN, color: WHITE },
+				},
+			],
 		}
 	}
 
@@ -42,7 +60,9 @@ module.exports = function getPresets(self) {
 		name: 'Auto',
 		style: { text: 'AUTO', size: '24', color: WHITE, bgcolor: BLACK },
 		steps: [{ down: [{ actionId: 'auto', options: {} }], up: [] }],
-		feedbacks: [{ feedbackId: 'in_transition', options: {} }],
+		feedbacks: [
+			{ feedbackId: 'in_transition', options: {}, style: { bgcolor: AMBER, color: BLACK } },
+		],
 	}
 	presets.ftb = {
 		type: 'button',
@@ -50,7 +70,7 @@ module.exports = function getPresets(self) {
 		name: 'Fade to black',
 		style: { text: 'FTB', size: '24', color: WHITE, bgcolor: BLACK },
 		steps: [{ down: [{ actionId: 'ftb', options: {} }], up: [] }],
-		feedbacks: [{ feedbackId: 'ftb', options: {} }],
+		feedbacks: [{ feedbackId: 'ftb', options: {}, style: { bgcolor: AMBER, color: BLACK } }],
 	}
 	for (const k of [1, 2]) {
 		presets[`dsk_${k}`] = {
@@ -59,7 +79,9 @@ module.exports = function getPresets(self) {
 			name: `DSK ${k}`,
 			style: { text: `DSK ${k}`, size: '18', color: WHITE, bgcolor: BLACK },
 			steps: [{ down: [{ actionId: 'dsk', options: { dsk: k, mode: 'TOGGLE' } }], up: [] }],
-			feedbacks: [{ feedbackId: 'dsk', options: { dsk: k } }],
+			feedbacks: [
+				{ feedbackId: 'dsk', options: { dsk: k }, style: { bgcolor: RED, color: WHITE } },
+			],
 		}
 	}
 	presets.record = {
@@ -67,15 +89,15 @@ module.exports = function getPresets(self) {
 		category: 'Transport',
 		name: 'Record program',
 		style: {
-			text: 'REC\\n$(mooswitcher:record_time)',
+			text: `REC\\n$(${label}:record_time)`,
 			size: '14',
 			color: WHITE,
 			bgcolor: BLACK,
 		},
 		steps: [{ down: [{ actionId: 'record', options: { mode: 'TOGGLE', path: '' } }], up: [] }],
 		feedbacks: [
-			{ feedbackId: 'recording', options: {} },
-			{ feedbackId: 'record_error', options: {} },
+			{ feedbackId: 'recording', options: {}, style: { bgcolor: RED, color: WHITE } },
+			{ feedbackId: 'record_error', options: {}, style: { bgcolor: AMBER, color: BLACK } },
 		],
 	}
 	presets.clean_record = {
@@ -83,15 +105,15 @@ module.exports = function getPresets(self) {
 		category: 'Transport',
 		name: 'Record clean feed',
 		style: {
-			text: 'CLEAN\\n$(mooswitcher:clean_record_time)',
+			text: `CLEAN\\n$(${label}:clean_record_time)`,
 			size: '14',
 			color: WHITE,
 			bgcolor: BLACK,
 		},
 		steps: [{ down: [{ actionId: 'clean_record', options: { mode: 'TOGGLE', path: '' } }], up: [] }],
 		feedbacks: [
-			{ feedbackId: 'clean_recording', options: {} },
-			{ feedbackId: 'record_error', options: {} },
+			{ feedbackId: 'clean_recording', options: {}, style: { bgcolor: RED, color: WHITE } },
+			{ feedbackId: 'record_error', options: {}, style: { bgcolor: AMBER, color: BLACK } },
 		],
 	}
 

@@ -4,7 +4,7 @@
 	"name": "mooswitcher",
 	"shortname": "mooswitcher",
 	"description": "Control the MooSwitcher live video switcher (buses, transitions, DSKs, media, recording, audio) over its TCP remote-control port",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"license": "MIT",
 	"repository": "https://github.com/moocowsheep/MooSwitcher",
 	"bugs": "https://github.com/moocowsheep/MooSwitcher/issues",
