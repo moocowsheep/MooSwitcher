@@ -115,7 +115,8 @@ Snapshot ControlServer::snapshot() const {
     s.transitionType = ui.transType;
     s.dsk.resize(kDskCount);
     for (int k = 0; k < kDskCount; ++k)
-        s.dsk[size_t(k)] = {ui.dskOn[k], ui.dskLevel[k], ui.dskSrc[k]};
+        s.dsk[size_t(k)] = {ui.dskOn[k], ui.dskLevel[k], ui.dskSrc[k],
+                            ui.dskTie[k], ui.dskAudioFollow[k]};
     auto rec = [](const Engine::RecordingState& r) {
         return RecordControlState{r.active, r.pending, r.error, r.frames,
                                   r.path};
@@ -209,6 +210,22 @@ void ControlServer::apply(const Request& r, Client& c) {
             if (checkDsk(r.a))
                 engine_.post({Command::Type::SetDskFade, r.a, r.b, 0.f});
             break;
+        case Op::DskTie: {
+            if (!checkDsk(r.a)) break;
+            const bool on = r.b == 2 ? !engine_.uiState().dskTie[r.a]
+                                     : r.b == 1;
+            engine_.post({Command::Type::SetDskTie, r.a, on ? 1 : 0, 0.f});
+            break;
+        }
+        case Op::DskAudioFollow: {
+            if (!checkDsk(r.a)) break;
+            const bool on = r.b == 2
+                                ? !engine_.uiState().dskAudioFollow[r.a]
+                                : r.b == 1;
+            engine_.post(
+                {Command::Type::SetDskAudioFollow, r.a, on ? 1 : 0, 0.f});
+            break;
+        }
         case Op::MediaPlay:
         case Op::MediaPause:
             if (checkInput(r.a))

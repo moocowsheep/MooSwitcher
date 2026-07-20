@@ -11,7 +11,9 @@
 namespace moo::gpu {
 
 // Compute pipelines + per-frame-in-flight targets:
-//   composite.comp:      inputs (UYVY) -> program RGBA16F (mix/wipes/FTB)
+//   composite.comp:      inputs (UYVY) -> program RGBA16F (mix/wipes/FTB);
+//                        dispatched again at proxy res for the look-ahead
+//                        preview monitor (preview bus + post-transition DSKs)
 //   pack_uyvy.comp:      program -> UYVY words (device buffer, for NDI out)
 //   proxy_down.comp:     inputs + program -> <=960x544 RGBA8 proxies
 //   multiview_tile.comp: proxies/labels/solid borders -> multiview RGBA8
@@ -40,12 +42,14 @@ public:
         const GpuFrame* b = nullptr;   // preview bus source (full res)
         CompositeJob sw;
         std::vector<SourceRef> mvInputs;  // per input, frame or placeholder
-        int previewInputIdx = -1;         // input index on PVW bus (-1 = none)
         int tallyPgmA = -1, tallyPgmB = -1, tallyPvw = -1;
         // Keyer fill frames (null = keyer dark; levels/flags ride in sw)
         // and their input indices for the red multiview border (-1 = none).
         const GpuFrame* dsk[kDskCount] = {nullptr, nullptr};
         int tallyDsk[kDskCount] = {-1, -1};
+        // Look-ahead preview monitor: keyer levels for the proxy-res
+        // preview composite (post-next-transition state; 0 = keyer absent).
+        float pvwDskLevel[kDskCount] = {0.f, 0.f};
         bool packProgram = false;         // record UYVY pack (NDI out enabled)
         bool packClean = false;           // UYVY clean-feed NDI output
         bool packNv12 = false;            // record NV12 pack (SRT out enabled)
@@ -138,6 +142,10 @@ private:
     Image clean_[kFramesInFlight];
     Image multiview_[kFramesInFlight];
     Image programProxy_[kFramesInFlight];
+    // Look-ahead preview monitor, composited directly at proxy resolution
+    // (a full-res preview pass would double composite bandwidth -- ~32 GB/s
+    // at 8K; the multiview tile is the only consumer).
+    Image previewMon_[kFramesInFlight];
     std::vector<Image> inputProxy_[kFramesInFlight];  // [fif][input]
     std::vector<uint8_t> proxyInit_[kFramesInFlight];
     bool targetsInit_[kFramesInFlight] = {};

@@ -153,6 +153,63 @@ TEST_CASE("mixer: solo isolates even an off-air input") {
     REQUIRE(std::fabs(m.out[kN - 2] - 0.25f) < 1e-4f);
 }
 
+TEST_CASE("mixer: audio-follow-DSK lifts an off-air key source to its level") {
+    MixerCore core(2, 480);
+    Mix1 m(2);
+    MixerCore::ChannelParams p[2];
+    const auto b = dcChunk(0.5f);
+    const float* in[2] = {nullptr, b.data()};  // input 1 off both buses
+    MixSnapshot snap{0, 0, 0.f, 0.f};
+    snap.dskSrc[0] = 1;
+
+    snap.dskGain[0] = 0.5f;  // keyer half faded in
+    core.process(in, p, snap, 0, m.out.data(), m.inPeak.data(), m.masterPeak);
+    core.process(in, p, snap, 0, m.out.data(), m.inPeak.data(), m.masterPeak);
+    REQUIRE(std::fabs(m.out[kN - 2] - 0.25f) < 1e-3f);
+
+    snap.dskGain[0] = 1.f;  // fully keyed: unity
+    core.process(in, p, snap, 0, m.out.data(), m.inPeak.data(), m.masterPeak);
+    core.process(in, p, snap, 0, m.out.data(), m.inPeak.data(), m.masterPeak);
+    REQUIRE(std::fabs(m.out[kN - 2] - 0.5f) < 1e-3f);
+
+    snap.dskSrc[0] = -1;  // follow disengaged: back off air
+    core.process(in, p, snap, 0, m.out.data(), m.inPeak.data(), m.masterPeak);
+    core.process(in, p, snap, 0, m.out.data(), m.inPeak.data(), m.masterPeak);
+    REQUIRE(std::fabs(m.out[kN - 2]) < 1e-5f);
+}
+
+TEST_CASE("mixer: DSK follow max-combines with program, never doubles") {
+    MixerCore core(1, 480);
+    Mix1 m(1);
+    MixerCore::ChannelParams p[1];
+    const auto a = dcChunk(0.5f);
+    const float* in[1] = {a.data()};
+    MixSnapshot snap{0, 0, 0.f, 0.f};  // input 0 IS program...
+    snap.dskSrc[0] = 0;                // ...and the followed key source
+    snap.dskGain[0] = 1.f;
+
+    core.process(in, p, snap, 0, m.out.data(), m.inPeak.data(), m.masterPeak);
+    core.process(in, p, snap, 0, m.out.data(), m.inPeak.data(), m.masterPeak);
+    REQUIRE(std::fabs(m.out[kN - 2] - 0.5f) < 1e-4f);  // unity, not 2x
+}
+
+TEST_CASE("mixer: solo bypasses DSK follow like the other buses") {
+    MixerCore core(2, 480);
+    Mix1 m(2);
+    MixerCore::ChannelParams p[2];
+    p[0].solo = true;
+    const auto a = dcChunk(0.25f);
+    const auto b = dcChunk(0.5f);
+    const float* in[2] = {a.data(), b.data()};
+    MixSnapshot snap{0, 0, 0.f, 0.f};
+    snap.dskSrc[0] = 1;  // followed keyer at full...
+    snap.dskGain[0] = 1.f;
+
+    core.process(in, p, snap, 0, m.out.data(), m.inPeak.data(), m.masterPeak);
+    core.process(in, p, snap, 0, m.out.data(), m.inPeak.data(), m.masterPeak);
+    REQUIRE(std::fabs(m.out[kN - 2] - 0.25f) < 1e-4f);  // ...but solo wins
+}
+
 TEST_CASE("mixer: per-input delay shifts by the configured frames") {
     MixerCore core(1, 480);
     Mix1 m(1);

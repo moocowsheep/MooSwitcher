@@ -66,6 +66,26 @@ module.exports = function getFeedbacks(self) {
 				return k ? k.on : false
 			},
 		},
+		dsk_tie: {
+			type: 'boolean',
+			name: 'DSK tied to transition',
+			defaultStyle: { bgcolor: AMBER, color: BLACK },
+			options: [dskOption],
+			callback: (fb) => {
+				const k = self.state && self.state.dsk[Number(fb.options.dsk) - 1]
+				return k ? !!k.tie : false
+			},
+		},
+		dsk_afv: {
+			type: 'boolean',
+			name: 'DSK audio follow enabled',
+			defaultStyle: { bgcolor: AMBER, color: BLACK },
+			options: [dskOption],
+			callback: (fb) => {
+				const k = self.state && self.state.dsk[Number(fb.options.dsk) - 1]
+				return k ? !!k.afv : false
+			},
+		},
 		recording: {
 			type: 'boolean',
 			name: 'Program recording active',

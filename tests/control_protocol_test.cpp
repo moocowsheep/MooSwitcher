@@ -101,9 +101,21 @@ TEST_CASE("control: dsk") {
     const auto fade = must("DSK 1 FADE 30");
     CHECK(fade.op == Request::Op::SetDskFade);
     CHECK(fade.b == 30);
+    const auto tie = must("DSK 1 TIE ON");
+    CHECK(tie.op == Request::Op::DskTie);
+    CHECK(tie.a == 0);
+    CHECK(tie.b == 1);
+    CHECK(must("dsk 2 tie").b == 2);  // bare form toggles
+    const auto afv = must("DSK 2 AFV OFF");
+    CHECK(afv.op == Request::Op::DskAudioFollow);
+    CHECK(afv.a == 1);
+    CHECK(afv.b == 0);
+    CHECK(must("DSK 1 FOLLOW TOGGLE").op == Request::Op::DskAudioFollow);
     mustFail("DSK 0 ON");
     mustFail("DSK 1 BLINK");
     mustFail("DSK 1 SRC 0");
+    mustFail("DSK 1 TIE MAYBE");
+    mustFail("DSK 1 TIE ON EXTRA");
 }
 
 TEST_CASE("control: media") {
@@ -158,6 +170,7 @@ TEST_CASE("control: state JSON is stable, 1-based, and escaped") {
     s.dsk[1].on = true;
     s.dsk[1].level = 1.f;
     s.dsk[1].src = 4;
+    s.dsk[1].tie = true;
     s.record.active = true;
     s.record.frames = 120;
     s.record.path = "/tmp/a \"b\".mkv";
@@ -175,6 +188,7 @@ TEST_CASE("control: state JSON is stable, 1-based, and escaped") {
     CHECK(j.find("\"preview\":3") != std::string::npos);
     CHECK(j.find("\"transition\":\"wipelr\"") != std::string::npos);
     CHECK(j.find("\"src\":5") != std::string::npos);
+    CHECK(j.find("\"src\":5,\"tie\":true,\"afv\":false") != std::string::npos);
     CHECK(j.find("\\\"b\\\"") != std::string::npos);
     CHECK(j.find("CAM \\\\ ONE") != std::string::npos);
     CHECK(j.find("\"item\":1") != std::string::npos);

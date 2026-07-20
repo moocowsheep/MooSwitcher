@@ -35,6 +35,12 @@ public slots:
     void setDskFade(int k, int ticks) {
         engine_.post({Command::Type::SetDskFade, k, ticks, 0.f});
     }
+    void setDskTie(int k, bool on) {
+        engine_.post({Command::Type::SetDskTie, k, on ? 1 : 0, 0.f});
+    }
+    void setDskAudioFollow(int k, bool on) {
+        engine_.post({Command::Type::SetDskAudioFollow, k, on ? 1 : 0, 0.f});
+    }
     void setMediaPlaying(int input, bool playing) {
         engine_.post(
             {Command::Type::MediaSetPlaying, input, playing ? 1 : 0, 0.f});
@@ -104,6 +110,7 @@ signals:
     void statusText(QString text);
     void stateChanged(int program, int preview, bool inTransition, bool ftb,
                       bool dsk1, bool dsk2);
+    void dskOptionsChanged(bool tie1, bool tie2, bool afv1, bool afv2);
     void audioLevels(QList<float> lr);  // per input L,R ... then master L,R
     void inputNamesChanged(QStringList refs);
     void healthChanged(QStringList problems);  // empty = all good

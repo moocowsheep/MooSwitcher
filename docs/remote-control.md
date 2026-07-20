@@ -51,6 +51,8 @@ Responses and pushes are one-line JSON events. Try it interactively:
 | `TBAR BEGIN` / `TBAR 0..1` / `TBAR END` | Manual T-bar |
 | `DSK k ON\|OFF\|TOGGLE` | Keyer on air |
 | `DSK k SRC n` / `DSK k FADE frames` | Keyer fill source / fade duration |
+| `DSK k TIE [ON\|OFF\|TOGGLE]` | Tie keyer to the next transition (bare = toggle) |
+| `DSK k AFV [ON\|OFF\|TOGGLE]` (alias `FOLLOW`) | Keyer audio-follow (bare = toggle) |
 | `MEDIA n PLAY\|PAUSE\|RESTART\|NEXT\|PREV` | Media input transport |
 | `MEDIA n LOOP ON\|OFF` | Media loop |
 | `RECORD START [path]\|STOP\|TOGGLE` | Program recording (no path → timestamped file in `~/Videos`) |
@@ -63,8 +65,9 @@ Responses and pushes are one-line JSON events. Try it interactively:
 
 Events: `hello` (on connect: `name`, `protocol`), `state`, `error`
 (`message`; bad commands never disconnect), `pong`. The state event
-carries program/preview, transition type, FTB, per-keyer on/level/src,
-record + clean-record status (incl. frames and fps for timecode),
+carries program/preview, transition type, FTB, per-keyer
+on/level/src/tie/afv, record + clean-record status (incl. frames and
+fps for timecode),
 SRT status, and per-input ref/type/connected plus media and audio-lane
 state. Unassigned inputs have `"ref":""`. Commands apply on the next
 render tick; confirmation is the next state push (single-frame latency).

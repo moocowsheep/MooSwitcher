@@ -58,16 +58,21 @@ void MixerCore::process(const float* const* in, const ChannelParams* p,
 
     for (int i = 0; i < nIn_; ++i) {
         float bus;
-        if (anySolo)
+        if (anySolo) {
             bus = p[i].solo ? 1.f : 0.f;  // PFL-style: solo bypasses the buses
-        else if (i == snap.pgm && i == snap.pvw)
-            bus = 1.f;  // same source on both buses: no mid-transition bump
-        else if (i == snap.pgm)
-            bus = std::cos(a * kHalfPi);
-        else if (i == snap.pvw)
-            bus = std::sin(a * kHalfPi);
-        else
-            bus = 0.f;
+        } else {
+            if (i == snap.pgm && i == snap.pvw)
+                bus = 1.f;  // same source on both buses: no mid-transition bump
+            else if (i == snap.pgm)
+                bus = std::cos(a * kHalfPi);
+            else if (i == snap.pvw)
+                bus = std::sin(a * kHalfPi);
+            else
+                bus = 0.f;
+            for (int k = 0; k < 2; ++k)  // audio-follow-DSK rides on top
+                if (i == snap.dskSrc[k])
+                    bus = std::max(bus, std::clamp(snap.dskGain[k], 0.f, 1.f));
+        }
 
         const float f1 = p[i].mute ? 0.f : p[i].gain;
         const float f0 = prevFader_[size_t(i)];

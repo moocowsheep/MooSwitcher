@@ -107,6 +107,34 @@ module.exports = function getActions(self) {
 			options: [dskOption, inputOption],
 			callback: (a) => self.sendCmd(`DSK ${a.options.dsk} SRC ${a.options.input}`),
 		},
+		dsk_tie: {
+			name: 'DSK tie to transition',
+			options: [
+				dskOption,
+				{
+					type: 'dropdown',
+					id: 'mode',
+					label: 'Action',
+					default: 'TOGGLE',
+					choices: SET_CHOICES,
+				},
+			],
+			callback: (a) => self.sendCmd(`DSK ${a.options.dsk} TIE ${a.options.mode}`),
+		},
+		dsk_afv: {
+			name: 'DSK audio follow',
+			options: [
+				dskOption,
+				{
+					type: 'dropdown',
+					id: 'mode',
+					label: 'Action',
+					default: 'TOGGLE',
+					choices: SET_CHOICES,
+				},
+			],
+			callback: (a) => self.sendCmd(`DSK ${a.options.dsk} AFV ${a.options.mode}`),
+		},
 		dsk_fade: {
 			name: 'Set DSK fade duration',
 			options: [

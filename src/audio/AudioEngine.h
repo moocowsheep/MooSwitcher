@@ -119,6 +119,13 @@ public:
     void publishMix(int pgm, int pvw, float alpha, float ftb) {
         mixSnap_.store(pack(pgm, pvw, alpha, ftb), std::memory_order_relaxed);
     }
+    // Audio-follow-DSK lanes: src = -1 for a keyer that is not following
+    // (or is dark); gain = the keyer's on-screen level. Same cadence as
+    // publishMix; a separate word keeps both packs lock-free.
+    void publishDsk(int src0, float gain0, int src1, float gain1) {
+        dskSnap_.store(packDsk(src0, gain0, src1, gain1),
+                       std::memory_order_relaxed);
+    }
 
     // A/V calibration: master bus delay applied before fan-out.
     std::atomic<int> masterDelayMs{10};
@@ -132,12 +139,15 @@ private:
     void run(std::stop_token st);
     static uint64_t pack(int pgm, int pvw, float alpha, float ftb);
     static MixSnapshot unpack(uint64_t v);
+    static uint64_t packDsk(int src0, float gain0, int src1, float gain1);
+    static void unpackDsk(uint64_t v, MixSnapshot& s);
 
     std::vector<std::unique_ptr<InputChannel>> channels_;
     MixerCore core_;
     MediaClock clk_{200, 1};  // 5 ms ticks, kChunkFrames samples each
     std::vector<PcmSink> sinks_;
     std::atomic<uint64_t> mixSnap_;
+    std::atomic<uint64_t> dskSnap_;
     std::atomic<int64_t> ticks_{0}, skips_{0};
     std::jthread thread_;
 };

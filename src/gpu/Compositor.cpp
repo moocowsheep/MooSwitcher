@@ -110,6 +110,9 @@ Compositor::Compositor(VkEngine& eng, const VideoFormatDesc& show, int mvW,
         programProxy_[f] = eng_.createImage2D(
             kProxyW, kProxyH, VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+        previewMon_[f] = eng_.createImage2D(
+            kProxyW, kProxyH, VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
         inputProxy_[f].resize(size_t(numInputs_));
         for (auto& p : inputProxy_[f])
             p = eng_.createImage2D(kProxyW, kProxyH, VK_FORMAT_R8G8B8A8_UNORM,
@@ -185,6 +188,7 @@ Compositor::~Compositor() {
         eng_.destroyImage(clean_[f]);
         eng_.destroyImage(multiview_[f]);
         eng_.destroyImage(programProxy_[f]);
+        eng_.destroyImage(previewMon_[f]);
         for (auto& p : inputProxy_[f]) eng_.destroyImage(p);
         for (int feed = 0; feed < kFeedCount; ++feed) {
             eng_.destroyBuffer(packDev_[feed][f]);
@@ -412,7 +416,8 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
     auto& mv = multiview_[fif];
 
     if (!targetsInit_[fif]) {
-        for (VkImage img : {prog.img, clean.img, mv.img})
+        for (VkImage img :
+             {prog.img, clean.img, mv.img, previewMon_[fif].img})
             barrier(cmd, img, VK_PIPELINE_STAGE_2_NONE, 0,
                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                     VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
@@ -507,6 +512,48 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
                        sizeof(cpc), &cpc);
     vkCmdDispatch(cmd, uint32_t((show_.width + 15) / 16),
                   uint32_t((show_.height + 15) / 16), 1);
+
+    // -- look-ahead preview: preview bus + keyers at their post-transition
+    //    levels, composited directly at proxy resolution (the multiview
+    //    PREVIEW monitor is the only consumer -- a full-res pass would
+    //    double composite bandwidth). Same pipeline; only the source, the
+    //    target, and the keyer levels change. --
+    int pvwMonW, pvwMonH;
+    proxyUsed(show_, pvwMonW, pvwMonH);
+    {
+        VkDescriptorImageInfo pvwOutInfo{VK_NULL_HANDLE, previewMon_[fif].view,
+                                         VK_IMAGE_LAYOUT_GENERAL};
+        w[0].pImageInfo = &bInfo;
+        w[1].pImageInfo = &bUvInfo;
+        w[2].pImageInfo = &bInfo;  // b bus unused at alpha 0
+        w[3].pImageInfo = &bUvInfo;
+        w[4].pImageInfo = &pvwOutInfo;
+        w[9].pImageInfo = &pvwOutInfo;  // cleanEnabled = 0: bound, not written
+        eng_.cmdPushDescriptorSet(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                  composite_.layout, 0, 10, w);
+        CompositePC ppc = cpc;
+        ppc.outW = pvwMonW;
+        ppc.outH = pvwMonH;
+        ppc.aFmt = cpc.bFmt;
+        ppc.bFmt = cpc.bFmt;
+        ppc.aW = cpc.bW;
+        ppc.aH = cpc.bH;
+        fitMap(ppc.aW, ppc.aH, ppc.outW, ppc.outH, ppc.aMap);
+        memcpy(ppc.bMap, ppc.aMap, sizeof(ppc.bMap));
+        ppc.alpha = 0.f;
+        ppc.ftb = 0.f;  // look-ahead never fades to black
+        ppc.transType = 0;
+        ppc.aCm = cpc.bCm;
+        ppc.k1Level = job.pvwDskLevel[0];
+        ppc.k2Level = job.pvwDskLevel[1];
+        fitMap(ppc.k1FullW, ppc.k1FullH, ppc.outW, ppc.outH, ppc.k1Map);
+        fitMap(ppc.k2FullW, ppc.k2FullH, ppc.outW, ppc.outH, ppc.k2Map);
+        ppc.cleanEnabled = 0;
+        vkCmdPushConstants(cmd, composite_.layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(ppc), &ppc);
+        vkCmdDispatch(cmd, uint32_t((pvwMonW + 15) / 16),
+                      uint32_t((pvwMonH + 15) / 16), 1);
+    }
 
     // program written -> read by pack + program proxy
     barrier(cmd, prog.img, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -650,11 +697,8 @@ void Compositor::record(VkCommandBuffer cmd, const TickJob& job, int fif,
     }
     tileFromProxy(cmd, programProxy_[fif], pgmProxW, pgmProxH, outputX, 0,
                   outputW, outputH, fif);
-    if (job.previewInputIdx >= 0) {
-        const auto& [pw, ph] = proxDims[size_t(job.previewInputIdx)];
-        tileFromProxy(cmd, inputProxy_[fif][size_t(job.previewInputIdx)], pw, ph,
-                      outputX, previewY, outputW, mvH_ - previewY, fif);
-    }
+    tileFromProxy(cmd, previewMon_[fif], pvwMonW, pvwMonH, outputX, previewY,
+                  outputW, mvH_ - previewY, fif);
 
     // Pass 2: labels.
     memBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,

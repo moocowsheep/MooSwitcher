@@ -165,7 +165,19 @@ std::optional<Request> parseLine(std::string_view line, std::string& err) {
             r.op = Request::Op::SetDskFade;
             return r;
         }
-        return fail(err, "dsk action is ON/OFF/TOGGLE/SRC/FADE");
+        if (w == "tie" || w == "afv" || w == "follow") {
+            const bool tie = w == "tie";
+            r.b = 2;  // bare form toggles
+            if (n == 4 && !parseOnOff(t.tok[3], r.b))
+                return fail(err, std::string("dsk ") + (tie ? "tie" : "afv") +
+                                     " takes ON/OFF/TOGGLE");
+            if (n > 4)
+                return fail(err, std::string("dsk ") + (tie ? "tie" : "afv") +
+                                     " takes ON/OFF/TOGGLE");
+            r.op = tie ? Request::Op::DskTie : Request::Op::DskAudioFollow;
+            return r;
+        }
+        return fail(err, "dsk action is ON/OFF/TOGGLE/SRC/FADE/TIE/AFV");
     }
 
     if (cmd == "media") {
@@ -309,7 +321,12 @@ std::string toJson(const Snapshot& s) {
         appendBool(out, "on", s.dsk[k].on);
         out += ",\"level\":";
         appendF3(out, s.dsk[k].level);
-        out += ",\"src\":" + std::to_string(s.dsk[k].src + 1) + "}";
+        out += ",\"src\":" + std::to_string(s.dsk[k].src + 1);
+        out += ',';
+        appendBool(out, "tie", s.dsk[k].tie);
+        out += ',';
+        appendBool(out, "afv", s.dsk[k].audioFollow);
+        out += '}';
     }
     out += ']';
     out += ',';

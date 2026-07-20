@@ -586,6 +586,12 @@ void Engine::renderLoop(std::stop_token st) {
                 case Command::Type::SetDskFade:
                     switcher_.setDskDuration(c.arg, c.arg2);
                     break;
+                case Command::Type::SetDskTie:
+                    switcher_.setDskTie(c.arg, c.arg2 != 0);
+                    break;
+                case Command::Type::SetDskAudioFollow:
+                    switcher_.setDskAudioFollow(c.arg, c.arg2 != 0);
+                    break;
                 case Command::Type::MediaSetPlaying:
                     if (c.arg >= 0 && c.arg < N) {
                         inputs_[size_t(c.arg)]->setMediaPlaying(c.arg2 != 0);
@@ -720,6 +726,8 @@ void Engine::renderLoop(std::stop_token st) {
                    {job.dskOn[0], job.dskOn[1]},
                    {job.dskLevel[0], job.dskLevel[1]},
                    {job.dskSrc[0], job.dskSrc[1]},
+                   {job.dskTie[0], job.dskTie[1]},
+                   {job.dskAudioFollow[0], job.dskAudioFollow[1]},
                    int(switcher_.transitionType()),
                    int(switcher_.transitionDuration()),
                    switcher_.transitionSoftness()};
@@ -852,8 +860,6 @@ void Engine::renderLoop(std::stop_token st) {
         tj.a = pick(job.programSrc);
         tj.b = pick(job.previewSrc);
         tj.sw = job;
-        tj.previewInputIdx =
-            (job.previewSrc >= 0 && job.previewSrc < N) ? job.previewSrc : -1;
         tj.tallyPgmA = tPgmA;
         tj.tallyPgmB = tPgmB;
         tj.tallyPvw = tPvw;
@@ -870,8 +876,18 @@ void Engine::renderLoop(std::stop_token st) {
             } else {
                 tj.dsk[k] = f;
             }
+            // Look-ahead preview: keyers at their post-transition state
+            // (dark ones stay dark -- same guard as above).
+            tj.pvwDskLevel[k] =
+                (tj.dsk[k] && job.dskFutureOn[k]) ? 1.f : 0.f;
             tj.tallyDsk[k] = tDsk[k];
         }
+        if (audio_)  // audio-follow-DSK rides the guarded on-screen levels
+            audio_->publishDsk(
+                job.dskAudioFollow[0] ? job.dskSrc[0] : -1,
+                job.dskAudioFollow[0] ? tj.sw.dskLevel[0] : 0.f,
+                job.dskAudioFollow[1] ? job.dskSrc[1] : -1,
+                job.dskAudioFollow[1] ? tj.sw.dskLevel[1] : 0.f);
 
         // -- frame slot: wait out the submission from 2 ticks ago --
         const uint64_t value = renderTL_.reserve();

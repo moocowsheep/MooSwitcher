@@ -29,6 +29,7 @@ public:
 private:
     void onState(int program, int preview, bool inTransition, bool ftb,
                  bool dsk1, bool dsk2);
+    void onDskOptions(bool tie1, bool tie2, bool afv1, bool afv2);
     void onInputNames(const QStringList& refs);
     void pushTransition();
     void refreshBusReadouts();
@@ -67,6 +68,8 @@ private:
     QPushButton* dskBtns_[kDskCount] = {nullptr, nullptr};
     QComboBox* dskSrc_[kDskCount] = {nullptr, nullptr};
     QSpinBox* dskFade_[kDskCount] = {nullptr, nullptr};
+    QPushButton* dskTie_[kDskCount] = {nullptr, nullptr};
+    QPushButton* dskAfv_[kDskCount] = {nullptr, nullptr};
     struct MediaRow {
         QLabel* name = nullptr;
         QLabel* time = nullptr;
@@ -82,6 +85,8 @@ private:
     int lastProgram_ = -1, lastPreview_ = -1;
     bool lastFtb_ = false;
     bool lastDskOn_[kDskCount] = {false, false};
+    bool lastDskTie_[kDskCount] = {false, false};
+    bool lastDskAfv_[kDskCount] = {false, false};
 };
 
 }  // namespace moo::ui

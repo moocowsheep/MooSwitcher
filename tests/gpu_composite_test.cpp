@@ -52,7 +52,6 @@ TEST_CASE("composite + multiview convert BT.709 UYVY to expected RGB") {
     gpu::Compositor::TickJob tj;
     tj.a = frame.get();
     tj.b = frame.get();
-    tj.previewInputIdx = 0;
     tj.tallyPgmA = 0;  // exercises the red border path
     tj.packProgram = true;
     tj.mvInputs.push_back({frame.get()});
@@ -311,6 +310,30 @@ TEST_CASE("DSK keying: straight, premult, opaque fallback, FTB over keyers") {
         CHECK(near(p[0], 0, 6));
         CHECK(near(p[1], 0, 6));
         CHECK(near(p[2], 0, 6));
+    }
+    {  // look-ahead: keyer off program but at full in the preview monitor
+        auto tj = baseJob();
+        tj.dsk[0] = keyStraight.get();
+        tj.sw.dskLevel[0] = 0.f;
+        tj.pvwDskLevel[0] = 1.f;
+        const uint8_t* rb = run(tj);
+        const uint8_t* p = pgm(rb);
+        CHECK(near(p[0], 191, 12));  // program untouched
+        CHECK(near(p[1], 0, 12));
+        // PREVIEW tile center: preview bus red under the half-alpha green
+        // key -> mix(red, green, 0.502) ~= (95, 96, 0).
+        const uint8_t* q = rb + (size_t(27) * mvW + 48) * 4;
+        INFO(int(q[0]) << "," << int(q[1]) << "," << int(q[2]));
+        CHECK(near(q[0], 95, 12));
+        CHECK(near(q[1], 96, 12));
+        CHECK(near(q[2], 0, 12));
+    }
+    {  // look-ahead ignores FTB: preview monitor stays lit at full black
+        auto tj = baseJob();
+        tj.sw.ftb = 1.f;
+        const uint8_t* rb = run(tj);
+        const uint8_t* q = rb + (size_t(27) * mvW + 48) * 4;
+        CHECK(near(q[0], 191, 12));
     }
 
     vkDestroyCommandPool(eng.device(), pool, nullptr);

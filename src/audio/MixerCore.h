@@ -18,11 +18,17 @@ constexpr int framesForMs(int ms) { return ms * (kSampleRate / 1000); }
 
 // Latest bus/transition state from the video switcher; audio follows video.
 // alpha: 0 = program only, 1 = preview fully on air. ftb: 0 = normal, 1 = black.
+// dskSrc/dskGain: audio-follow-DSK lanes -- an input matching dskSrc[k] gets
+// at least dskGain[k] of bus (the keyer's on-screen level; -1 = keyer not
+// following, or dark). max()-combined with the A/B bus so a source that is
+// both program and key never doubles.
 struct MixSnapshot {
     int pgm = 0;
     int pvw = 1;
     float alpha = 0.f;
     float ftb = 0.f;
+    int dskSrc[2] = {-1, -1};
+    float dskGain[2] = {0.f, 0.f};
 };
 
 // Interleaved-stereo delay line. The tap is chosen per chunk; changing it

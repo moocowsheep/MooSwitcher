@@ -128,6 +128,8 @@ public:
         bool dskOn[kDskCount] = {false, false};
         float dskLevel[kDskCount] = {0.f, 0.f};
         int dskSrc[kDskCount] = {0, 0};
+        bool dskTie[kDskCount] = {false, false};
+        bool dskAudioFollow[kDskCount] = {false, false};
         int transType = 0;  // TransitionType as int
         int transDur = 30;  // ticks
         float transSoftness = 0.02f;

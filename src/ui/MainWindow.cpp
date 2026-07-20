@@ -407,6 +407,29 @@ QFrame#keyerCard {
     border: 1px solid #26292d;
     border-radius: 6px;
 }
+QPushButton#keyOptionButton {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #3c4147, stop:0.5 #24272b,
+                                stop:1 #17191c);
+    border: 1px solid #0e0f11;
+    border-top-color: #4d545b;
+    border-radius: 4px;
+    color: #b9c0c7;
+    font-size: 9px;
+    font-weight: 850;
+    min-height: 21px;
+    padding: 2px 6px;
+}
+QPushButton#keyOptionButton:hover { border-top-color: #6a727b; color: #e6eaee; }
+QPushButton#keyOptionButton[active="true"] {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #ffe3a4, stop:0.07 #ffc757,
+                                stop:0.5 #f0a72b, stop:0.53 #dd981f,
+                                stop:1 #8a5a08);
+    border: 1px solid #ffd47e;
+    border-top-color: #ffedc8;
+    color: #2e2005;
+}
 QLabel#keyerTitle {
     color: #d6dade;
     font-size: 10px;
@@ -1371,6 +1394,28 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
         settings->addWidget(dskFade_[k]);
         cardCol->addLayout(settings);
 
+        auto* options = new QHBoxLayout;
+        options->setSpacing(5);
+        dskTie_[k] = new QPushButton(QStringLiteral("TIE"));
+        dskTie_[k]->setObjectName(QStringLiteral("keyOptionButton"));
+        dskTie_[k]->setProperty("active", false);
+        dskTie_[k]->setToolTip(
+            QStringLiteral("Tie to transition: this keyer rides the next "
+                           "AUTO / CUT / T-bar move"));
+        connect(dskTie_[k], &QPushButton::clicked, &bridge_,
+                [this, k] { bridge_.setDskTie(k, !lastDskTie_[k]); });
+        options->addWidget(dskTie_[k], 1);
+        dskAfv_[k] = new QPushButton(QStringLiteral("AUD FOLLOW"));
+        dskAfv_[k]->setObjectName(QStringLiteral("keyOptionButton"));
+        dskAfv_[k]->setProperty("active", false);
+        dskAfv_[k]->setToolTip(
+            QStringLiteral("Audio follows key: the key source's audio fades "
+                           "in and out with the keyer"));
+        connect(dskAfv_[k], &QPushButton::clicked, &bridge_,
+                [this, k] { bridge_.setDskAudioFollow(k, !lastDskAfv_[k]); });
+        options->addWidget(dskAfv_[k], 1);
+        cardCol->addLayout(options);
+
         dskBtns_[k] = new QPushButton(QStringLiteral("TAKE"));
         dskBtns_[k]->setObjectName(QStringLiteral("keyButton"));
         dskBtns_[k]->setProperty("active", false);
@@ -1411,6 +1456,8 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
     connect(&bridge_, &EngineBridge::inputNamesChanged, this,
             &MainWindow::onInputNames);
     connect(&bridge_, &EngineBridge::stateChanged, this, &MainWindow::onState);
+    connect(&bridge_, &EngineBridge::dskOptionsChanged, this,
+            &MainWindow::onDskOptions);
 
     connect(transType_, &QComboBox::currentIndexChanged, this,
             &MainWindow::pushTransition);
@@ -1446,6 +1493,8 @@ MainWindow::MainWindow(EngineBridge& bridge, const QStringList& inputNames,
                 dskSrc_[k]->setCurrentIndex(d.source);
             dskFade_[k]->setValue(d.fadeDurTicks);
             if (d.on) bridge_.dskToggle(k);
+            if (d.tie) bridge_.setDskTie(k, true);
+            if (d.audioFollow) bridge_.setDskAudioFollow(k, true);
         }
     }
 
@@ -1506,7 +1555,7 @@ ShowFile::State MainWindow::collectState() const {
     state.transDurTicks = transDur_->value();
     for (int k = 0; k < kDskCount; ++k)
         state.dsk[k] = {dskSrc_[k]->currentIndex(), dskFade_[k]->value(),
-                        lastDskOn_[k]};
+                        lastDskOn_[k], lastDskTie_[k], lastDskAfv_[k]};
     state.cfg.masterAudioDelayMs = bridge_.masterDelayMs();
     state.chans.clear();
     for (int i = 0; i < bridge_.inputCount(); ++i)
@@ -1741,6 +1790,21 @@ void MainWindow::onState(int program, int preview, bool inTransition, bool ftb,
         tbar_->blockSignals(true);
         tbar_->setValue(0);
         tbar_->blockSignals(false);
+    }
+}
+
+void MainWindow::onDskOptions(bool tie1, bool tie2, bool afv1, bool afv2) {
+    const bool tie[kDskCount] = {tie1, tie2};
+    const bool afv[kDskCount] = {afv1, afv2};
+    for (int k = 0; k < kDskCount; ++k) {
+        if (tie[k] != lastDskTie_[k]) {
+            setVisualState(dskTie_[k], "active", tie[k]);
+            lastDskTie_[k] = tie[k];
+        }
+        if (afv[k] != lastDskAfv_[k]) {
+            setVisualState(dskAfv_[k], "active", afv[k]);
+            lastDskAfv_[k] = afv[k];
+        }
     }
 }
 

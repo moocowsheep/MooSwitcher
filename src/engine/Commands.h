@@ -17,6 +17,8 @@ struct Command {
         DskToggle,      // arg = keyer index
         SetDskSource,   // arg = keyer index, arg2 = source index
         SetDskFade,     // arg = keyer index, arg2 = duration ticks
+        SetDskTie,      // arg = keyer index, arg2 = bool
+        SetDskAudioFollow,  // arg = keyer index, arg2 = bool
         MediaSetPlaying,  // arg = input index, arg2 = bool
         MediaRestart,     // arg = input index
         MediaSetLoop,     // arg = input index, arg2 = bool

@@ -23,6 +23,11 @@ struct CompositeJob {
     int dskSrc[kDskCount] = {0, 0};
     float dskLevel[kDskCount] = {0.f, 0.f};
     bool dskOn[kDskCount] = {false, false};
+    bool dskTie[kDskCount] = {false, false};
+    bool dskAudioFollow[kDskCount] = {false, false};
+    // State after the next transition completes (look-ahead preview): a tied
+    // keyer toggles, an untied one keeps its engaged target.
+    bool dskFutureOn[kDskCount] = {false, false};
 };
 
 // Pure program/preview bus + transition state machine. No I/O, no clocks:
@@ -50,11 +55,16 @@ public:
     void tbarEnd();
     void fadeToBlack();  // toggles FTB target
     void setFtbDuration(int64_t ticks);
-    // DSKs: independent on/off fades (FTB semantics), never tied to A/B
-    // transitions. Source/duration changes never disturb a running level.
+    // DSKs: independent on/off fades (FTB semantics) by default.
+    // Source/duration changes never disturb a running level. A keyer with
+    // tie set rides the NEXT transition instead (ATEM "next transition"
+    // convention): auto/T-bar progress drives its level toward the toggled
+    // state, cut snaps it, and a canceled transition ramps it back.
     void dskToggle(int k);
     void setDskSource(int k, int src);
     void setDskDuration(int k, int64_t ticks);
+    void setDskTie(int k, bool tie);
+    void setDskAudioFollow(int k, bool follow);
 
     CompositeJob tick(int64_t nowTick);
 
@@ -69,10 +79,19 @@ public:
     float dskLevel(int k) const { return dsk_[k].level; }
     int dskSource(int k) const { return dsk_[k].src; }
     int64_t dskDuration(int k) const { return dsk_[k].dur; }
+    bool dskTie(int k) const { return dsk_[k].tie; }
+    bool dskAudioFollow(int k) const { return dsk_[k].audioFollow; }
+    // Keyer state after the next transition lands (look-ahead preview).
+    bool dskWillBeOn(int k) const {
+        const Dsk& d = dsk_[k];
+        if (d.tieRun) return d.target > 0.5f;  // riding this transition
+        return d.tie ? !(d.target > 0.5f) : d.target > 0.5f;
+    }
 
 private:
     void completeTransition();
     void cancelTransition();
+    void armTiedKeyers();
 
     int program_ = 0;
     int preview_ = 1;
@@ -96,6 +115,10 @@ private:
         float level = 0.f;
         float target = 0.f;
         int64_t dur = 30;
+        bool tie = false;          // keyer joins the next A/B transition
+        bool audioFollow = false;  // mixer tracks level on the key source
+        bool tieRun = false;       // level driven by the active transition
+        float tieFrom = 0.f;       // level when that transition began
     };
     Dsk dsk_[kDskCount];
 

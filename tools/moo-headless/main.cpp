@@ -49,6 +49,8 @@ int main(int argc, char** argv) {
     std::vector<std::pair<int, int>> syncSpecs;  // --framesync IDX[:FRAMES]
     std::vector<std::pair<int, int>> dskArms;   // --dsk K:SRC
     std::vector<std::pair<int, int>> dskFades;  // --dsk-fade K:TICKS
+    std::vector<int> dskTies;                   // --dsk-tie K
+    std::vector<int> dskAfvs;                   // --dsk-afv K
     struct DskToggle {
         double afterS;
         int k;
@@ -214,6 +216,14 @@ int main(int argc, char** argv) {
             int k = 0, ticks = 0;
             if (!v || sscanf(v, "%d:%d", &k, &ticks) != 2) return 2;
             dskFades.emplace_back(k, ticks);
+        } else if (a == "--dsk-tie") {
+            const char* v = next();
+            if (!v) return 2;
+            dskTies.push_back(atoi(v));
+        } else if (a == "--dsk-afv") {
+            const char* v = next();
+            if (!v) return 2;
+            dskAfvs.push_back(atoi(v));
         } else if (a == "--dsk-toggle-after") {
             const char* v = next();
             double s = 0;
@@ -242,6 +252,7 @@ int main(int argc, char** argv) {
                     "[--dump-every S] [--cuts] [--no-audio] "
                     "[--audio-delay MS] [--framesync IDX[:FRAMES]] "
                     "[--dsk K:SRC] [--dsk-fade K:TICKS] "
+                    "[--dsk-tie K] [--dsk-afv K] "
                     "[--dsk-toggle-after S:K] [--control-port PORT] "
                     "[--validate]\n");
             return 2;
@@ -276,6 +287,10 @@ int main(int argc, char** argv) {
         engine.post({moo::Command::Type::SetDskSource, k, src, 0.f});
     for (auto [k, ticks] : dskFades)
         engine.post({moo::Command::Type::SetDskFade, k, ticks, 0.f});
+    for (int k : dskTies)
+        engine.post({moo::Command::Type::SetDskTie, k, 1, 0.f});
+    for (int k : dskAfvs)
+        engine.post({moo::Command::Type::SetDskAudioFollow, k, 1, 0.f});
     std::unique_ptr<moo::ctl::ControlServer> control;
     if (controlPort > 0)
         control = std::make_unique<moo::ctl::ControlServer>(engine, controlPort);

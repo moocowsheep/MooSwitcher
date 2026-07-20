@@ -155,6 +155,8 @@ bool ShowFile::load(State& st) const {
         d.fadeDurTicks =
             std::clamp(s.value("fadeDurTicks", d.fadeDurTicks).toInt(), 1, 600);
         d.on = s.value("on", d.on).toBool();
+        d.tie = s.value("tie", d.tie).toBool();
+        d.audioFollow = s.value("audioFollow", d.audioFollow).toBool();
     }
     s.endArray();
     return true;
@@ -248,6 +250,8 @@ void ShowFile::save(const State& st) const {
         s.setValue("source", st.dsk[i].source);
         s.setValue("fadeDurTicks", st.dsk[i].fadeDurTicks);
         s.setValue("on", st.dsk[i].on);
+        s.setValue("tie", st.dsk[i].tie);
+        s.setValue("audioFollow", st.dsk[i].audioFollow);
     }
     s.endArray();
 }

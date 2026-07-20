@@ -198,8 +198,127 @@ TEST_CASE("DSK keyer index bounds are enforced") {
     sw.dskToggle(2);
     sw.setDskSource(5, 1);
     sw.setDskDuration(-3, 5);
+    sw.setDskTie(2, true);
+    sw.setDskAudioFollow(-1, true);
     const CompositeJob j = sw.tick(0);
     REQUIRE(j.dskLevel[0] == 0.f);
     REQUIRE(j.dskLevel[1] == 0.f);
     REQUIRE_FALSE(j.dskOn[0]);
+    REQUIRE_FALSE(j.dskTie[0]);
+}
+
+TEST_CASE("tied DSK rides an auto transition in, ignoring its own duration") {
+    SwitcherCore sw;
+    sw.setTransition(TransitionType::Mix, 10, 0.f);
+    sw.setDskDuration(0, 100);  // must not matter while tied
+    sw.setDskTie(0, true);
+    sw.tick(0);
+    REQUIRE(sw.dskWillBeOn(0));  // off + tied: next transition brings it in
+    sw.autoTransition(100);
+    REQUIRE(sw.dskOn(0));  // destination committed at arm time
+    REQUIRE(sw.tick(100).dskLevel[0] == Approx(0.1f));
+    REQUIRE(sw.tick(104).dskLevel[0] == Approx(0.5f));
+    const CompositeJob landed = sw.tick(109);
+    REQUIRE(landed.programSrc == 1);
+    REQUIRE(landed.dskLevel[0] == Approx(1.0f));
+    REQUIRE(landed.dskOn[0]);
+    // Engaged + still tied: the next transition would take it out.
+    REQUIRE_FALSE(sw.dskWillBeOn(0));
+}
+
+TEST_CASE("tied DSK fades out with the transition from an engaged state") {
+    SwitcherCore sw;
+    sw.setTransition(TransitionType::Mix, 10, 0.f);
+    sw.setDskDuration(0, 1);
+    sw.tick(0);
+    sw.dskToggle(0);
+    sw.tick(1);
+    REQUIRE(sw.dskLevel(0) == Approx(1.0f));
+    sw.setDskTie(0, true);
+    sw.autoTransition(10);
+    REQUIRE(sw.tick(14).dskLevel[0] == Approx(0.5f));
+    const CompositeJob landed = sw.tick(19);
+    REQUIRE(landed.dskLevel[0] == Approx(0.0f));
+    REQUIRE_FALSE(landed.dskOn[0]);
+}
+
+TEST_CASE("tied DSK follows the T-bar and lands at full travel") {
+    SwitcherCore sw;
+    sw.setDskTie(0, true);
+    sw.tbarBegin();
+    sw.tbarSet(0.25f);
+    REQUIRE(sw.tick(0).dskLevel[0] == Approx(0.25f));
+    sw.tbarEnd();  // held mid-travel: keyer holds too
+    REQUIRE(sw.tick(1).dskLevel[0] == Approx(0.25f));
+    sw.tbarBegin();  // re-grab continues, must not re-arm
+    sw.tbarSet(1.0f);
+    const CompositeJob j = sw.tick(2);
+    REQUIRE(j.programSrc == 1);
+    REQUIRE(j.dskLevel[0] == Approx(1.0f));
+    REQUIRE(j.dskOn[0]);
+}
+
+TEST_CASE("cut executes the tied keyer toggle instantly") {
+    SwitcherCore sw;
+    sw.setDskTie(0, true);
+    sw.tick(0);
+    sw.cut();
+    const CompositeJob j = sw.tick(1);
+    REQUIRE(j.programSrc == 1);
+    REQUIRE(j.dskLevel[0] == Approx(1.0f));
+    REQUIRE(j.dskOn[0]);
+    sw.cut();  // and back out
+    REQUIRE(sw.tick(2).dskLevel[0] == Approx(0.0f));
+}
+
+TEST_CASE("cut mid-transition lands tied keyers with the buses") {
+    SwitcherCore sw;
+    sw.setTransition(TransitionType::Mix, 10, 0.f);
+    sw.setDskTie(0, true);
+    sw.tick(0);
+    sw.autoTransition(1);
+    sw.tick(5);
+    sw.cut();
+    const CompositeJob j = sw.tick(6);
+    REQUIRE(j.programSrc == 1);
+    REQUIRE(j.dskLevel[0] == Approx(1.0f));
+}
+
+TEST_CASE("bus assign cancels a tied transition; keyer ramps back") {
+    SwitcherCore sw;
+    sw.setTransition(TransitionType::Mix, 10, 0.f);
+    sw.setDskDuration(0, 5);
+    sw.setDskTie(0, true);
+    sw.tick(0);
+    sw.autoTransition(1);
+    REQUIRE(sw.tick(5).dskLevel[0] == Approx(0.5f));
+    sw.setPreview(3);  // cancel without swap
+    REQUIRE_FALSE(sw.dskOn(0));  // destination reverted to off
+    REQUIRE(sw.tick(6).dskLevel[0] == Approx(0.3f));  // own 5-tick rate
+    REQUIRE(sw.tick(10).dskLevel[0] == Approx(0.0f));
+}
+
+TEST_CASE("untied DSK keeps its own fade during a transition") {
+    SwitcherCore sw;
+    sw.setTransition(TransitionType::Mix, 10, 0.f);
+    sw.setDskDuration(0, 20);
+    sw.tick(0);
+    sw.dskToggle(0);
+    sw.autoTransition(1);
+    REQUIRE(sw.tick(5).dskLevel[0] == Approx(0.25f));  // 5/20, not 5/10
+    const CompositeJob landed = sw.tick(10);
+    REQUIRE(landed.programSrc == 1);
+    REQUIRE(landed.dskLevel[0] == Approx(0.5f));  // still on its own clock
+}
+
+TEST_CASE("audio-follow and tie flags pass through to the job") {
+    SwitcherCore sw;
+    sw.setDskAudioFollow(1, true);
+    sw.setDskTie(0, true);
+    const CompositeJob j = sw.tick(0);
+    REQUIRE(j.dskAudioFollow[1]);
+    REQUIRE_FALSE(j.dskAudioFollow[0]);
+    REQUIRE(j.dskTie[0]);
+    REQUIRE(j.dskFutureOn[0]);        // off + tied -> comes in next
+    REQUIRE_FALSE(j.dskFutureOn[1]);  // off + untied -> stays off
 }

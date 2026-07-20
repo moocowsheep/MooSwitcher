@@ -83,6 +83,26 @@ module.exports = function getPresets(self) {
 				{ feedbackId: 'dsk', options: { dsk: k }, style: { bgcolor: RED, color: WHITE } },
 			],
 		}
+		presets[`dsk_${k}_tie`] = {
+			type: 'button',
+			category: 'Transport',
+			name: `DSK ${k} tie`,
+			style: { text: `DSK ${k}\\nTIE`, size: '14', color: WHITE, bgcolor: BLACK },
+			steps: [{ down: [{ actionId: 'dsk_tie', options: { dsk: k, mode: 'TOGGLE' } }], up: [] }],
+			feedbacks: [
+				{ feedbackId: 'dsk_tie', options: { dsk: k }, style: { bgcolor: AMBER, color: BLACK } },
+			],
+		}
+		presets[`dsk_${k}_afv`] = {
+			type: 'button',
+			category: 'Transport',
+			name: `DSK ${k} audio follow`,
+			style: { text: `DSK ${k}\\nAFV`, size: '14', color: WHITE, bgcolor: BLACK },
+			steps: [{ down: [{ actionId: 'dsk_afv', options: { dsk: k, mode: 'TOGGLE' } }], up: [] }],
+			feedbacks: [
+				{ feedbackId: 'dsk_afv', options: { dsk: k }, style: { bgcolor: AMBER, color: BLACK } },
+			],
+		}
 	}
 	presets.record = {
 		type: 'button',

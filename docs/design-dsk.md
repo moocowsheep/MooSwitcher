@@ -4,6 +4,8 @@ Two DSK layers composited over the A/B program mix, keyed from **native
 alpha inputs** (NDI/OMT UYVA or local raster stills). Shipped across K1
 (UYVA ingest), K2 (engine/shader), K3 (GUI/persistence), with static
 PNG/WebP-style inputs added by the media layer. Bench: `bench-dsk.md`.
+K4 follow-ups (2026-07-19): look-ahead preview, tie-to-transition,
+audio-follow-DSK — see the sections below.
 
 ## Scope decisions (locked with the operator)
 
@@ -110,10 +112,62 @@ PNG/WebP-style inputs added by the media layer. Bench: `bench-dsk.md`.
   8K program holds 59.94 (dominant cost = the key input's +50% upload
   bandwidth).
 
+## Look-ahead preview (K4)
+
+- The multiview PREVIEW monitor is now a real composite: preview bus +
+  both keyers at their **post-next-transition** state (a tied keyer shows
+  toggled, an untied one shows its current engaged state; binary levels —
+  no animation). FTB never darkens it.
+- Rendered by a **second `composite.comp` dispatch at proxy resolution**
+  (the `proxyUsed` extent inside a 960×544 RGBA16F target, ~1/144 of the
+  8K pixel count) — the full-res second pass that was ruled out
+  (~32 GB/s at 8K) stays ruled out; the operator approved the lower-res
+  preview. Same pipeline/descriptors with the b-bus source bound as A,
+  alpha 0, `cleanEnabled` 0; the multiview tile samples it directly
+  (mode 1), replacing the old raw input-proxy preview tile.
+- Keyer fills are sampled at full res by the proxy-size dispatch
+  (bilinear undersampling aliasing accepted for a monitor).
+- The placeholder guard applies: a dead key source previews dark, not
+  opaque black. `TickJob::pvwDskLevel[]` carries the guarded levels.
+
+## Tie-to-transition (K4)
+
+- Per-keyer `tie` flag (ATEM "next transition" convention), state in
+  `SwitcherCore::Dsk{tie, tieRun, tieFrom}`:
+  - Arming an AUTO or grabbing the T-bar snapshots `tieFrom = level` and
+    commits `target` to the toggled state; while the transition runs the
+    keyer's level = `mix(tieFrom, target, transition progress)` — it
+    rides the transition's clock, not its own fade duration.
+  - CUT with no transition running executes the toggle instantly (snap
+    with the bus swap); CUT mid-transition lands keyers with the buses.
+  - A canceled transition (bus assign) reverts `target` to the
+    pre-transition state; the keyer ramps back at its **own** fade rate.
+  - Re-grabbing a held T-bar does NOT re-arm (guard in `tbarBegin`);
+    `dskToggle` during a tied run redirects the destination mid-flight.
+- Untied keyers are unchanged: independent fades, own duration.
+
+## Audio-follow-DSK (K4)
+
+- Per-keyer `audioFollow` flag. The render thread publishes each
+  followed keyer's **guarded on-screen level** + source to the audio
+  engine (`publishDsk`, a second packed atomic beside the bus snapshot);
+  `MixerCore` gives that input at least `level` of bus gain,
+  **max-combined** with the A/B crossfade so a source that is both
+  program and key never doubles. Solo still bypasses everything.
+- Follow rides the same level the viewer sees: linear (not equal-power)
+  and forced silent by the placeholder guard when the key source dies.
+
+## Operator surface additions (K4)
+
+- GUI keyer cards: TIE and AUD FOLLOW toggle buttons (amber when on).
+- Headless: `--dsk-tie K`, `--dsk-afv K`.
+- ShowFile `[dsk]`: `tie`, `audioFollow` keys (absent = off).
+- Remote control: `DSK k TIE|AFV [ON|OFF|TOGGLE]` (bare form toggles;
+  `FOLLOW` = alias for AFV); state JSON keyers gained `tie`/`afv`.
+  Companion module: `dsk_tie`/`dsk_afv` actions + feedbacks + presets.
+
 ## Known limits / candidates
 
-- Preview is still the raw source — there is no "preview with DSK"
-  look-ahead pass (single composited program image by design; a second
-  composite would be needed).
-- Tie-DSK-to-transition (ATEM-style) not implemented.
 - Keyer sources must be inputs; local alpha stills can occupy those inputs.
+- Look-ahead preview is monitor-resolution only (by design; see above) and
+  shows tied keyers at full level, not a transition rehearsal.

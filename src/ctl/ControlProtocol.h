@@ -30,6 +30,8 @@ struct Request {
         DskSet,       // a = keyer, b = 0 off / 1 on / 2 toggle
         SetDskSource,  // a = keyer, b = input
         SetDskFade,    // a = keyer, b = duration ticks
+        DskTie,        // a = keyer, b as DskSet (ride the next transition)
+        DskAudioFollow,  // a = keyer, b as DskSet
         MediaPlay,     // a = input
         MediaPause,    // a = input
         MediaRestart,  // a = input
@@ -69,6 +71,8 @@ struct DskState {
     bool on = false;
     float level = 0.f;
     int src = 0;  // 0-based here; serialized 1-based
+    bool tie = false;
+    bool audioFollow = false;
 };
 
 struct MediaControlState {

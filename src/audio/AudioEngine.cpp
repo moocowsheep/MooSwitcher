@@ -60,7 +60,9 @@ void InputChannel::pushInterleaved(const float* lr, int frames, int rate,
 }
 
 AudioEngine::AudioEngine(int nInputs)
-    : core_(nInputs), mixSnap_(pack(0, 1, 0.f, 0.f)) {
+    : core_(nInputs),
+      mixSnap_(pack(0, 1, 0.f, 0.f)),
+      dskSnap_(packDsk(-1, 0.f, -1, 0.f)) {
     for (int i = 0; i < nInputs; ++i)
         channels_.push_back(std::make_unique<InputChannel>());
 }
@@ -99,6 +101,23 @@ MixSnapshot AudioEngine::unpack(uint64_t v) {
     return s;
 }
 
+// Same layout per keyer as pack(): src as int16 (-1 = not following),
+// on-screen level q16.
+uint64_t AudioEngine::packDsk(int src0, float gain0, int src1, float gain1) {
+    auto q16 = [](float v) {
+        return uint64_t(std::lround(std::clamp(v, 0.f, 1.f) * 65535.f));
+    };
+    return (uint64_t(uint16_t(int16_t(src0))) << 48) | (q16(gain0) << 32) |
+           (uint64_t(uint16_t(int16_t(src1))) << 16) | q16(gain1);
+}
+
+void AudioEngine::unpackDsk(uint64_t v, MixSnapshot& s) {
+    s.dskSrc[0] = int(int16_t(uint16_t(v >> 48)));
+    s.dskGain[0] = float((v >> 32) & 0xFFFF) / 65535.f;
+    s.dskSrc[1] = int(int16_t(uint16_t(v >> 16)));
+    s.dskGain[1] = float(v & 0xFFFF) / 65535.f;
+}
+
 void AudioEngine::run(std::stop_token st) {
     auto& tickCtr = Stats::counter("audio.ticks");
     auto& skipCtr = Stats::counter("audio.skips");
@@ -129,7 +148,8 @@ void AudioEngine::run(std::stop_token st) {
     while (!st.stop_requested()) {
         clk_.sleepUntilTick(m);
 
-        const MixSnapshot snap = unpack(mixSnap_.load(std::memory_order_relaxed));
+        MixSnapshot snap = unpack(mixSnap_.load(std::memory_order_relaxed));
+        unpackDsk(dskSnap_.load(std::memory_order_relaxed), snap);
 
         for (int i = 0; i < n; ++i) {
             auto& ch = *channels_[size_t(i)];

@@ -26,6 +26,8 @@ public:
         int source = 0;
         int fadeDurTicks = 30;
         bool on = false;
+        bool tie = false;
+        bool audioFollow = false;
 
         bool operator==(const DskState&) const = default;
     };
