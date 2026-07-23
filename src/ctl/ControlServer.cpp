@@ -17,8 +17,8 @@
  * Additional permission under GNU GPL version 3 section 7: you may link
  * MooSwitcher against the proprietary NDI SDK, the NVIDIA CUDA / Video
  * Codec SDK runtime (CUDA, NVENC, NVDEC), and the OMT (libomt / libvmx)
- * runtime, and distribute the combined work. See LICENSE-EXCEPTION.md for
- * the full exception text. */
+ * runtime, and distribute the combined work. See EXCEPTIONS.md for the
+ * full exception text. */
 
 #include "ctl/ControlServer.h"
 

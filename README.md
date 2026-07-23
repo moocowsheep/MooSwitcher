@@ -156,7 +156,7 @@ MooSwitcher is licensed under the **GNU General Public License v3.0 or later**
 under GPLv3 section 7, MooSwitcher may be linked against and distributed with the
 proprietary **NDI SDK**, the **NVIDIA CUDA / Video Codec SDK** runtime (CUDA,
 NVENC, NVDEC), and the **OMT** (libomt / libvmx) runtime; the full exception text
-is in [`LICENSE-EXCEPTION.md`](LICENSE-EXCEPTION.md).
+is in [`EXCEPTIONS.md`](EXCEPTIONS.md).
 
 ---
 NDI® is a registered trademark of Vizrt NDI AB. The standard NDI SDK is royalty-free
