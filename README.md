@@ -151,11 +151,12 @@ Companion module with tally feedbacks and presets lives in `companion/`.
 
 Copyright © 2026 Devin Block.
 
-MooSwitcher is licensed under the **Mozilla Public License 2.0** (MPL-2.0) — see
-[`LICENSE.md`](LICENSE.md). MPL-2.0 is file-level copyleft: modifications to
-MooSwitcher's own source files must stay open, but the project may be built and
-distributed while linked against the proprietary NDI SDK and the NVIDIA runtime
-(CUDA/NVENC) without a separate linking exception.
+MooSwitcher is licensed under the **GNU General Public License v3.0 or later**
+(GPL-3.0-or-later) — see [`LICENSE.md`](LICENSE.md). As an additional permission
+under GPLv3 section 7, MooSwitcher may be linked against and distributed with the
+proprietary **NDI SDK**, the **NVIDIA CUDA / Video Codec SDK** runtime (CUDA,
+NVENC, NVDEC), and the **OMT** (libomt / libvmx) runtime; the full exception text
+is at the top of `LICENSE.md`.
 
 ---
 NDI® is a registered trademark of Vizrt NDI AB. The standard NDI SDK is royalty-free
