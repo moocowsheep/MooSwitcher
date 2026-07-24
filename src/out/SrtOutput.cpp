@@ -39,7 +39,8 @@ SrtOutput::SrtOutput(gpu::VkEngine& vk, media::CudaCtx& cuda,
     static std::once_flag netInit;
     std::call_once(netInit, [] { avformat_network_init(); });
 
-    if (!enc_.open(cuda_, show_, cfg_.bitrateKbps)) return;
+    enc_ = media::openVideoEncoder(cuda_, show_, cfg_.encoder);
+    if (!enc_) return;
     if (withAudio && !aac_.open(48000, 160'000))
         MOO_LOGW("srt out: aac encoder unavailable; sending video-only");
 
@@ -118,7 +119,7 @@ void SrtOutput::encodeLoop(std::stop_token st) {
         // synthesized timecodes) keeps both outputs' A/V skew centered by
         // the same master delay. Measured flash+tone, 1080p: without this
         // the SRT path reads ~1.5 ticks audio-late vs the NDI path.
-        if (enc_.encode(imports_[e.fif].ptr, e.tick + 1, pkts)) {
+        if (enc_->encode(imports_[e.fif].ptr, e.tick + 1, pkts)) {
             copied_[e.fif].store(e.value, std::memory_order_release);
             encoded_.fetch_add(1, std::memory_order_relaxed);
             encCtr.add();
@@ -134,7 +135,7 @@ void SrtOutput::encodeLoop(std::stop_token st) {
         }
     }
     pkts.clear();
-    enc_.drain(pkts);
+    enc_->drain(pkts);
     for (auto* p : pkts) {
         if (!pkts_.push(p)) av_packet_free(&p);
     }
@@ -148,7 +149,7 @@ bool SrtOutput::openMux() {
 
     AVStream* st = avformat_new_stream(oc_, nullptr);
     if (!st) return false;
-    avcodec_parameters_from_context(st->codecpar, enc_.codecCtx());
+    if (!enc_->fillCodecpar(st->codecpar)) return false;
     st->time_base = {1, 90000};
 
     if (aac_.ok()) {
@@ -182,7 +183,7 @@ void SrtOutput::closeMux(bool writeTrailer) {
 void SrtOutput::muxLoop(std::stop_token st) {
     auto& sentCtr = Stats::counter("out.srt.packets");
     auto& reconnCtr = Stats::counter("out.srt.reconnects");
-    const AVRational vidTb = enc_.timeBase();
+    const AVRational vidTb = enc_->timeBase();
     const AVRational audTb = aac_.timeBase();
     int64_t nextRetryNs = 0;
 

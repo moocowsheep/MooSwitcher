@@ -94,6 +94,19 @@ int main(int argc, char** argv) {
             cfg.srtUrl = args[++i].toStdString();
         else if (args[i] == QStringLiteral("--srt-bitrate") && i + 1 < args.size())
             cfg.srtBitrateKbps = args[++i].toInt();
+        else if (args[i] == QStringLiteral("--encoder-preset") &&
+                 i + 1 < args.size()) {
+            const QString name = args[++i];
+            if (!moo::media::parseEncoderPreset(name.toStdString(),
+                                                cfg.encoderPreset))
+                qWarning("unknown --encoder-preset '%s'; using auto",
+                         qUtf8Printable(name));
+        } else if (args[i] == QStringLiteral("--encoder") && i + 1 < args.size()) {
+            const QString name = args[++i];
+            if (!moo::media::parseEncoderBackend(name.toStdString(), cfg.encoder))
+                qWarning("unknown --encoder '%s'; using auto",
+                         qUtf8Printable(name));
+        }
         else if (args[i] == QStringLiteral("--record") && i + 1 < args.size())
             recordPath = args[++i];
         else if (args[i] == QStringLiteral("--clean-record") &&

@@ -40,6 +40,7 @@
 #include "gpu/Compositor.h"
 #include "gpu/UploadRing.h"
 #include "gpu/VkEngine.h"
+#include "media/IVideoEncoder.h"
 #include "ndi/NdiFinder.h"
 #include "ndi/NdiReceiver.h"
 
@@ -83,6 +84,10 @@ struct EngineConfig {
     std::string srtUrl;      // empty = SRT output off
     int srtBitrateKbps = 0;  // 0 = auto
     int recordBitrateKbps = 0;  // 0 = auto; independent of SRT output
+    // NVENC path and speed/quality preset for SRT output and recording
+    // (--encoder, --encoder-preset).
+    media::EncoderBackend encoder = media::EncoderBackend::Auto;
+    media::EncoderPreset encoderPreset = media::EncoderPreset::Auto;
     bool audio = true;
     // A/V calibration. Measured on this box: with 0, offsets land at
     // 1080p NDI ~-1ms / SRT ~-7ms, 8K NDI ~+7ms (audio ages ~one capture

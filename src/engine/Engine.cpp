@@ -154,7 +154,9 @@ void Engine::requestRecordingImpl(std::string path, bool clean) {
         } else {
             next = std::make_shared<FileRecorder>(
                 cuda_, *comp_, renderTL_, path, cfg_.show, cfg_.audio,
-                clock_.currentTick(), cfg_.recordBitrateKbps,
+                clock_.currentTick(),
+                media::EncoderConfig{cfg_.encoder, cfg_.encoderPreset,
+                                     cfg_.recordBitrateKbps, true},
                 clean ? gpu::Compositor::Feed::Clean
                       : gpu::Compositor::Feed::Program);
             if (!next->ok()) next.reset();
@@ -286,7 +288,10 @@ bool Engine::start(const EngineConfig& cfg) {
     if (!cfg_.srtUrl.empty()) {
         srtOut_ = std::make_unique<SrtOutput>(
             vk_, cuda_, *comp_, renderTL_,
-            SrtOutConfig{cfg_.srtUrl, cfg_.srtBitrateKbps}, cfg_.show,
+            SrtOutConfig{cfg_.srtUrl,
+                         {cfg_.encoder, cfg_.encoderPreset,
+                          cfg_.srtBitrateKbps, /*globalHeader=*/false}},
+            cfg_.show,
             cfg_.audio);
         if (!srtOut_->ok()) {
             MOO_LOGE("SRT out init failed; disabling");

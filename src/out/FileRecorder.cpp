@@ -33,7 +33,8 @@ namespace moo {
 FileRecorder::FileRecorder(media::CudaCtx& cuda, gpu::Compositor& comp,
                            gpu::Timeline& renderTL,
                            std::string path, const VideoFormatDesc& show,
-                           bool withAudio, int64_t startTick, int bitrateKbps,
+                           bool withAudio, int64_t startTick,
+                           media::EncoderConfig encoder,
                            gpu::Compositor::Feed feed)
     : cuda_(cuda), comp_(comp), renderTL_(renderTL), feed_(feed),
       statsPrefix_(feed == gpu::Compositor::Feed::Clean ? "cleanRecord"
@@ -42,8 +43,10 @@ FileRecorder::FileRecorder(media::CudaCtx& cuda, gpu::Compositor& comp,
     static std::once_flag networkInit;
     std::call_once(networkInit, [] { avformat_network_init(); });
 
-    if (!encoder_.open(cuda_, show_, bitrateKbps, true)) return;
-    startSample_ = av_rescale_q(startTick_, encoder_.timeBase(),
+    encoder.globalHeader = true;  // Matroska takes SPS/PPS as extradata
+    encoder_ = media::openVideoEncoder(cuda_, show_, encoder);
+    if (!encoder_) return;
+    startSample_ = av_rescale_q(startTick_, encoder_->timeBase(),
                                 AVRational{1, audio::kSampleRate});
     if (withAudio && !aac_.open(audio::kSampleRate, 160'000))
         MOO_LOGW("record: AAC encoder unavailable; recording video-only");
@@ -107,10 +110,8 @@ bool FileRecorder::openMux() {
 
     AVStream* video = avformat_new_stream(output_, nullptr);
     if (!video) return false;
-    if (avcodec_parameters_from_context(video->codecpar,
-                                        encoder_.codecCtx()) < 0)
-        return false;
-    video->time_base = encoder_.timeBase();
+    if (!encoder_->fillCodecpar(video->codecpar)) return false;
+    video->time_base = encoder_->timeBase();
     videoStream_ = video->index;
 
     if (aac_.ok()) {
@@ -193,7 +194,7 @@ void FileRecorder::encodeLoop(std::stop_token stop) {
 
         packets.clear();
         const int64_t pts = event.tick + 1 - startTick_;
-        if (encoder_.encode(imports_[event.fif].ptr, pts, packets)) {
+        if (encoder_->encode(imports_[event.fif].ptr, pts, packets)) {
             copied_[event.fif].store(event.value, std::memory_order_release);
             encoded_.fetch_add(1, std::memory_order_relaxed);
             encodedCounter.add();
@@ -211,14 +212,14 @@ void FileRecorder::encodeLoop(std::stop_token stop) {
     }
 
     packets.clear();
-    encoder_.drain(packets);
+    encoder_->drain(packets);
     for (auto* packet : packets)
         if (!videoPackets_.push(packet)) av_packet_free(&packet);
 }
 
 void FileRecorder::muxLoop(std::stop_token stop) {
     auto& packetCounter = Stats::counter(statsPrefix_ + ".packets");
-    const AVRational videoTimeBase = encoder_.timeBase();
+    const AVRational videoTimeBase = encoder_->timeBase();
     const AVRational audioTimeBase = aac_.timeBase();
 
     while (!stop.stop_requested() || videoPackets_.size() ||

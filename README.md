@@ -98,6 +98,24 @@ else. A source without alpha keys fully opaque (a fadeable fullscreen overlay). 
 `docs/design-dsk.md`; measurements: `docs/bench-dsk.md` (an 8K UYVA key over an 8K program
 holds full rate; keyers-off cost is nil).
 
+## Encoder backends
+
+HEVC program output (SRT and recording) runs through `hevc_nvenc` by default.
+A second backend drives NVENC directly through `libnvidia-encode`, so an FFmpeg
+build without `hevc_nvenc` cannot take program output down; `--encoder
+auto|ffmpeg|direct` selects one in either executable (`auto` falls back to the
+direct path only when FFmpeg has no usable encoder). The two are configured
+identically (ultra-low-latency, CBR, single-frame VBV, no B-frames) and measure
+the same at every resolution tested.
+
+`--encoder-preset auto|p1..p7` sets the NVENC speed/quality preset. `auto`
+picks P2 above 4K and P4 at or below it: measured against a real 4K source,
+the two are quality-identical at the auto bitrate (PSNR Y within 0.01 dB),
+but at 8K a P4 picture takes long enough that the render thread finds the pack
+slot still busy at the next tick and drops the frame — P2 holds full 59.94
+where P4 loses 25–40% of the SRT feed. Design and measurements:
+`docs/design-encoder.md`.
+
 ## Build
 
 Requires: gcc 14+/clang, CMake 3.25+, Ninja, the NDI SDK 6, and FFmpeg

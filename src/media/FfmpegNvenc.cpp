@@ -34,8 +34,9 @@ extern "C" {
 namespace moo::media {
 
 bool FfmpegNvenc::open(CudaCtx& cuda, const VideoFormatDesc& show,
-                       int bitrateKbps, bool globalHeader) {
+                       const EncoderConfig& cfg) {
     cuda_ = &cuda;
+    int bitrateKbps = cfg.bitrateKbps;
     w_ = show.width;
     h_ = show.height;
     const double fps = double(show.fpsN) / double(show.fpsD);
@@ -77,14 +78,15 @@ bool FfmpegNvenc::open(CudaCtx& cuda, const VideoFormatDesc& show,
     enc_->time_base = {int(show.fpsD), int(show.fpsN)};
     enc_->framerate = {int(show.fpsN), int(show.fpsD)};
     enc_->pix_fmt = AV_PIX_FMT_CUDA;
-    if (globalHeader) enc_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    if (cfg.globalHeader) enc_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     enc_->hw_frames_ctx = av_buffer_ref(hwFrames_);
     enc_->max_b_frames = 0;
     enc_->gop_size = std::max(1, int(fps * 2));  // IDR every ~2s
     enc_->bit_rate = int64_t(bitrateKbps) * 1000;
     enc_->rc_max_rate = enc_->bit_rate;
     enc_->rc_buffer_size = int(enc_->bit_rate * show.fpsD / show.fpsN);  // 1 frame
-    av_opt_set(enc_->priv_data, "preset", "p4", 0);
+    const char* preset = encoderPresetName(resolveEncoderPreset(cfg.preset, show));
+    av_opt_set(enc_->priv_data, "preset", preset, 0);
     av_opt_set(enc_->priv_data, "tune", "ull", 0);
     av_opt_set(enc_->priv_data, "rc", "cbr", 0);
     av_opt_set_int(enc_->priv_data, "delay", 0, 0);
@@ -97,9 +99,13 @@ bool FfmpegNvenc::open(CudaCtx& cuda, const VideoFormatDesc& show,
         return false;
     }
     frame_ = av_frame_alloc();
-    MOO_LOGI("nvenc: hevc %dx%d @ %.3f fps, %d kbps CBR (p4/ull)", w_, h_, fps,
-             bitrateKbps);
+    MOO_LOGI("nvenc: hevc %dx%d @ %.3f fps, %d kbps CBR (%s/ull)", w_, h_, fps,
+             bitrateKbps, preset);
     return true;
+}
+
+bool FfmpegNvenc::fillCodecpar(AVCodecParameters* par) const {
+    return enc_ && avcodec_parameters_from_context(par, enc_) >= 0;
 }
 
 void FfmpegNvenc::close() {

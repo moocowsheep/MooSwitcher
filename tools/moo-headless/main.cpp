@@ -189,6 +189,13 @@ int main(int argc, char** argv) {
         } else if (a == "--srt-bitrate") {
             const char* v = next();
             if (v) cfg.srtBitrateKbps = atoi(v);
+        } else if (a == "--encoder") {
+            const char* v = next();
+            if (!v || !moo::media::parseEncoderBackend(v, cfg.encoder)) return 2;
+        } else if (a == "--encoder-preset") {
+            const char* v = next();
+            if (!v || !moo::media::parseEncoderPreset(v, cfg.encoderPreset))
+                return 2;
         } else if (a == "--record") {
             if (const char* v = next()) recordPath = v;
         } else if (a == "--clean-record") {
@@ -276,6 +283,8 @@ int main(int argc, char** argv) {
                     "[--dsk K:SRC] [--dsk-fade K:TICKS] "
                     "[--dsk-tie K] [--dsk-afv K] "
                     "[--dsk-toggle-after S:K] [--control-port PORT] "
+                    "[--encoder auto|ffmpeg|direct] "
+                    "[--encoder-preset auto|p1..p7] "
                     "[--validate]\n");
             return 2;
         }

@@ -32,7 +32,7 @@
 #include "gpu/VkEngine.h"
 #include "media/AacEncoder.h"
 #include "media/CudaCtx.h"
-#include "media/FfmpegNvenc.h"
+#include "media/IVideoEncoder.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -55,7 +55,8 @@ public:
     FileRecorder(media::CudaCtx& cuda, gpu::Compositor& comp,
                  gpu::Timeline& renderTL,
                  std::string path, const VideoFormatDesc& show,
-                 bool withAudio, int64_t startTick, int bitrateKbps = 0,
+                 bool withAudio, int64_t startTick,
+                 media::EncoderConfig encoder = {},
                  gpu::Compositor::Feed feed =
                      gpu::Compositor::Feed::Program);
     ~FileRecorder();
@@ -95,7 +96,7 @@ private:
     int64_t startSample_ = 0;
 
     media::CudaCtx::Imported imports_[gpu::Compositor::kFramesInFlight]{};
-    media::FfmpegNvenc encoder_;
+    std::unique_ptr<media::IVideoEncoder> encoder_;
     media::AacEncoder aac_;
     std::vector<AVPacket*> aacScratch_;  // audio thread, then destructor only
 

@@ -30,7 +30,7 @@
 #include "gpu/VkEngine.h"
 #include "media/AacEncoder.h"
 #include "media/CudaCtx.h"
-#include "media/FfmpegNvenc.h"
+#include "media/IVideoEncoder.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -39,8 +39,8 @@ extern "C" {
 namespace moo {
 
 struct SrtOutConfig {
-    std::string url;         // srt://host:port?mode=...&latency=<usec>...
-    int bitrateKbps = 0;     // 0 = auto from resolution/fps
+    std::string url;  // srt://host:port?mode=...&latency=<usec>...
+    media::EncoderConfig encoder;  // bitrate 0 = auto from resolution/fps
 };
 
 // SRT/HEVC program output. The render thread packs NV12 into per-FIF
@@ -93,7 +93,7 @@ private:
     VideoFormatDesc show_;
 
     media::CudaCtx::Imported imports_[gpu::Compositor::kFramesInFlight]{};
-    media::FfmpegNvenc enc_;
+    std::unique_ptr<media::IVideoEncoder> enc_;
     media::AacEncoder aac_;
     std::vector<AVPacket*> aacScratch_;  // mixer-thread only
 

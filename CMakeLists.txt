@@ -76,12 +76,17 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
   libavcodec libavformat libavutil libavfilter libswresample libswscale)
 
+pkg_check_modules(FFNVCODEC REQUIRED IMPORTED_TARGET ffnvcodec)
+
 add_library(moo_media STATIC
   src/media/CudaCtx.cpp
   src/media/FfmpegNvenc.cpp
+  src/media/NvencDirect.cpp
+  src/media/VideoEncoder.cpp
   src/media/AacEncoder.cpp
 )
-target_link_libraries(moo_media PUBLIC moo_gpu CudaDriver PkgConfig::FFMPEG)
+target_link_libraries(moo_media PUBLIC moo_gpu CudaDriver PkgConfig::FFMPEG
+                      PkgConfig::FFNVCODEC ${CMAKE_DL_LIBS})
 target_compile_options(moo_media PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 
 # -- OMT (Open Media Transport): optional, vendored in third_party/omt.
@@ -210,6 +215,7 @@ if(MOO_BUILD_TESTS)
     tests/media_playlist_test.cpp
     tests/gpu_composite_test.cpp
     tests/interop_test.cpp
+    tests/nvenc_direct_test.cpp
   )
   target_link_libraries(moo_tests PRIVATE moo_core moo_gpu moo_media Catch2::Catch2WithMain)
   target_include_directories(moo_tests PRIVATE tools)
